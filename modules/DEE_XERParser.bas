@@ -50,6 +50,7 @@ Public Function ParseXERFile(filePath As String) As Boolean
     Dim lineText As String
     Dim parts() As String
     Dim lineCount As Long
+    Dim rowArr() As Variant
     lineCount = 0
 
     currentTable = ""
@@ -110,7 +111,7 @@ Public Function ParseXERFile(filePath As String) As Boolean
                     Dim rowCount As Integer
                     rowCount = UBound(parts)
                     If rowCount >= 1 Then
-                        ReDim rowArr(0 To rowCount - 1) As Variant
+                        ReDim rowArr(0 To rowCount - 1)
                         Dim ri As Integer
                         For ri = 1 To UBound(parts)
                             rowArr(ri - 1) = parts(ri)
@@ -337,6 +338,7 @@ Public Function GetAvailableBudgetFields() As Variant
     fields = GetFieldNames("TASK")
 
     Dim found() As String
+    Dim result() As String
     Dim foundCount As Integer
     ReDim found(0 To UBound(knownBudgetFields))
     foundCount = 0
@@ -352,7 +354,7 @@ Public Function GetAvailableBudgetFields() As Variant
     If foundCount = 0 Then
         GetAvailableBudgetFields = Array()
     Else
-        ReDim result(0 To foundCount - 1) As String
+        ReDim result(0 To foundCount - 1)
         Dim i As Integer
         For i = 0 To foundCount - 1
             result(i) = found(i)

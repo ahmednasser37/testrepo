@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+  <ribbon>
+    <tabs>
+      <tab id="tabDEE" label="Protocol DEE">
+
+        <!-- WBS Group -->
+        <group id="grpWBS" label="WBS">
+          <button id="btnWBSColor" label="Apply Colors" size="large"
+                  onAction="btn_WBSColor" imageMso="FillColor" />
+          <button id="btnWBSGroup" label="Outline Group" size="large"
+                  onAction="btn_WBSGroup" imageMso="Group" />
+          <button id="btnWBSAggregator" label="Aggregator" size="normal"
+                  onAction="btn_WBSAggregator" imageMso="MathSymbols" />
+          <button id="btnWBSColumns" label="WBS Columns" size="normal"
+                  onAction="btn_WBSColumns" imageMso="TableInsert" />
+          <checkBox id="chkSkipHeader" label="Skip Header Row"
+                    getPressed="chk_SkipHeader_getPressed"
+                    onAction="chk_SkipHeader" />
+          <comboBox id="cmbWBSLevel" label="Show Level"
+                    onChange="cmb_WBSLevelFilter" sizeString="Level 1">
+            <item id="lvlAll" label="All Levels" />
+            <item id="lvl1" label="Level 1" />
+            <item id="lvl2" label="Level 2" />
+            <item id="lvl3" label="Level 3" />
+            <item id="lvl4" label="Level 4" />
+          </comboBox>
+        </group>
+
+        <!-- Timeline Group -->
+        <group id="grpTimeline" label="Timeline">
+          <button id="btnDrawGantt" label="Draw Gantt" size="large"
+                  onAction="btn_DrawGantt" imageMso="ChartTypeBarInsertClassic" />
+          <button id="btnManageBars" label="Manage Bars" size="normal"
+                  onAction="btn_ManageBars" imageMso="ViewFullScreen" />
+          <button id="btnPrintSetup" label="Print Setup" size="normal"
+                  onAction="btn_PrintSetup" imageMso="PrintPreviewAndPrint" />
+        </group>
+
+        <!-- Progress Group -->
+        <group id="grpProgress" label="Progress">
+          <button id="btnCreatePMS" label="Create PMS" size="large"
+                  onAction="btn_CreatePMS" imageMso="TableDesign" />
+          <button id="btnCreatePMSEV" label="Create PMS (EV)" size="normal"
+                  onAction="btn_CreatePMSEV" imageMso="TableStyleClear" />
+          <button id="btnLockPeriod" label="Lock Period" size="normal"
+                  onAction="btn_LockPeriod" imageMso="ProtectSheet" />
+          <button id="btnSnapshot" label="Snapshot" size="normal"
+                  onAction="btn_Snapshot" imageMso="Copy" />
+          <button id="btnDashboard" label="Dashboard" size="normal"
+                  onAction="btn_Dashboard" imageMso="ChartTypePieInsertClassic" />
+          <button id="btnSCurveMonthly" label="S-Curve (Mo)" size="normal"
+                  onAction="btn_SCurveMonthly" imageMso="ChartTypeLineInsertClassic" />
+          <button id="btnSmartSpread" label="Smart Spread" size="normal"
+                  onAction="btn_SmartSpread" imageMso="PivotTableInsert" />
+        </group>
+
+        <!-- XER Group -->
+        <group id="grpXER" label="XER">
+          <button id="btnLoadSchedule" label="Load Schedule" size="large"
+                  onAction="btn_LoadSchedule" imageMso="FileOpen" />
+          <button id="btnExportXER" label="Export XER" size="large"
+                  onAction="btn_ExportXER" imageMso="ExportTextFile" />
+        </group>
+
+        <!-- Audit Group -->
+        <group id="grpAudit" label="Audit">
+          <button id="btnScheduleAudit" label="DCMA Audit" size="large"
+                  onAction="btn_ScheduleAudit" imageMso="ReviewCheckDocument" />
+          <button id="btnCPM" label="CPM Analysis" size="large"
+                  onAction="btn_CPM" imageMso="ChartTypeLineInsertClassic" />
+          <button id="btnLookAhead2W" label="2-Week LA" size="normal"
+                  onAction="btn_LookAhead2W" imageMso="CalendarView" />
+          <button id="btnLookAhead4W" label="4-Week LA" size="normal"
+                  onAction="btn_LookAhead4W" imageMso="CalendarView" />
+        </group>
+
+        <!-- Tools Group -->
+        <group id="grpTools" label="Tools">
+          <button id="btnCopyToLast" label="Copy To Last" size="normal"
+                  onAction="btn_CopyToLast" imageMso="Copy" />
+          <button id="btnFillDown" label="Fill Down" size="normal"
+                  onAction="btn_FillDown" imageMso="FillDown" />
+          <button id="btnTextCase" label="Text Case" size="normal"
+                  onAction="btn_TextCase" imageMso="ChangeCaseMenu" />
+          <button id="btnDataQuality" label="Data Quality" size="normal"
+                  onAction="btn_DataQuality" imageMso="ReviewCheckDocument" />
+        </group>
+
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

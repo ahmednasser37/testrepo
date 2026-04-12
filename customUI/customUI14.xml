@@ -75,6 +75,28 @@
                   onAction="btn_LookAhead4W" imageMso="CalendarView" />
         </group>
 
+        <!-- Baseline Group -->
+        <group id="grpBaseline" label="Baseline">
+          <button id="btnLoadBaseline" label="Load Baseline" size="large"
+                  onAction="btn_LoadBaseline" imageMso="FileOpen" />
+          <button id="btnCompareBaseline" label="Compare" size="large"
+                  onAction="btn_CompareBaseline" imageMso="ReviewShowMarkup" />
+          <button id="btnClearBaseline" label="Clear" size="normal"
+                  onAction="btn_ClearBaseline" imageMso="Cancel" />
+        </group>
+
+        <!-- Version & Audit Group -->
+        <group id="grpVersion" label="Version &amp; Audit">
+          <button id="btnSaveVersion" label="Save Version" size="large"
+                  onAction="btn_SaveVersion" imageMso="FileSave" />
+          <button id="btnShowHistory" label="History" size="large"
+                  onAction="btn_ShowHistory" imageMso="Undo" />
+          <button id="btnCompareSnapshots" label="Diff Snapshots" size="normal"
+                  onAction="btn_CompareSnapshots" imageMso="ReviewShowMarkup" />
+          <button id="btnShowAuditLog" label="Audit Log" size="normal"
+                  onAction="btn_ShowAuditLog" imageMso="ViewFullScreen" />
+        </group>
+
         <!-- Tools Group -->
         <group id="grpTools" label="Tools">
           <button id="btnCopyToLast" label="Copy To Last" size="normal"
@@ -85,6 +107,8 @@
                   onAction="btn_TextCase" imageMso="ChangeCaseMenu" />
           <button id="btnDataQuality" label="Data Quality" size="normal"
                   onAction="btn_DataQuality" imageMso="ReviewCheckDocument" />
+          <button id="btnSettings" label="Settings" size="normal"
+                  onAction="btn_Settings" imageMso="ToolsOptions" />
         </group>
 
       </tab>

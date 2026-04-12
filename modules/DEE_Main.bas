@@ -292,6 +292,86 @@ ErrHandler:
 End Sub
 
 ' ===========================================================================
+' BASELINE GROUP CALLBACKS
+' ===========================================================================
+
+Public Sub btn_LoadBaseline(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    DEE_BaselineCompare.LoadBaseline
+    Exit Sub
+ErrHandler:
+    MsgBox "Load Baseline error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+Public Sub btn_CompareBaseline(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    DEE_BaselineCompare.CompareBaseline
+    Exit Sub
+ErrHandler:
+    MsgBox "Compare Baseline error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+Public Sub btn_ClearBaseline(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    DEE_BaselineCompare.ClearBaseline
+    Exit Sub
+ErrHandler:
+    MsgBox "Clear Baseline error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+' ===========================================================================
+' VERSION HISTORY CALLBACKS
+' ===========================================================================
+
+Public Sub btn_SaveVersion(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    DEE_VersionHistory.SaveVersion
+    Exit Sub
+ErrHandler:
+    MsgBox "Save Version error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+Public Sub btn_ShowHistory(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    DEE_VersionHistory.ShowHistory
+    Exit Sub
+ErrHandler:
+    MsgBox "Show History error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+' ===========================================================================
+' AUDIT TRAIL CALLBACKS
+' ===========================================================================
+
+Public Sub btn_CompareSnapshots(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    DEE_AuditTrail.CompareSnapshots
+    Exit Sub
+ErrHandler:
+    MsgBox "Compare Snapshots error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+Public Sub btn_ShowAuditLog(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    DEE_AuditTrail.ShowAuditLog
+    Exit Sub
+ErrHandler:
+    MsgBox "Show Audit Log error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+' ===========================================================================
+' SETTINGS CALLBACK
+' ===========================================================================
+
+Public Sub btn_Settings(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    DEE_Settings.OpenSettings
+    Exit Sub
+ErrHandler:
+    MsgBox "Settings error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+' ===========================================================================
 ' SMART IMPORT PIPELINE -- LoadXERSchedule
 ' (Section 9 -- Smart XER Import Pipeline)
 ' ===========================================================================

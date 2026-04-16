@@ -407,9 +407,9 @@ Private Function CreateGUID() As String
     Dim i As Integer
     Dim hexChars As String
     hexChars = "0123456789ABCDEF"
-    Dim parts() As Integer
+    Dim parts As Variant
     parts = Array(8, 4, 4, 4, 12)
-    Dim p As Integer
+    Dim p As Variant
     For Each p In parts
         If Len(g) > 0 Then g = g & "-"
         Dim j As Integer

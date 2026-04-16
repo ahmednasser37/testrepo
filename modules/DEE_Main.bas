@@ -33,35 +33,55 @@ End Sub
 ' ===========================================================================
 
 Public Sub btn_WBSColor(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "WBSColor started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_WBS.ApplyWBSColoring ActiveSheet
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "WBSColor: " & Err.Description
     MsgBox "WBS Color error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_WBSGroup(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "WBSGroup started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_WBS.ApplyWBSGrouping ActiveSheet, DEE_Utils.GetSkipFirstRow()
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "WBSGroup: " & Err.Description
     MsgBox "WBS Group error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_WBSAggregator(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "WBSAggregator started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_WBS.ApplySumLevels ActiveSheet
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "WBSAggregator: " & Err.Description
     MsgBox "WBS Aggregator error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_WBSColumns(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "WBSColumns started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_WBS.WBSInColumns ActiveSheet
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "WBSColumns: " & Err.Description
     MsgBox "WBS Columns error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub chk_SkipHeader(control As IRibbonControl, pressed As Boolean)
@@ -75,13 +95,13 @@ End Sub
 Public Sub cmb_WBSLevelFilter(control As IRibbonControl, text As String)
     On Error GoTo ErrHandler
     Dim level As Integer
-    level = 0  ' Default: all levels
+    level = 0
     Select Case LCase(Trim(text))
         Case "all levels": level = 0
-        Case "level 1": level = 1
-        Case "level 2": level = 2
-        Case "level 3": level = 3
-        Case "level 4": level = 4
+        Case "level 1":    level = 1
+        Case "level 2":    level = 2
+        Case "level 3":    level = 3
+        Case "level 4":    level = 4
     End Select
     DEE_WBS.FilterByLevel ActiveSheet, level
     Exit Sub
@@ -94,11 +114,16 @@ End Sub
 ' ===========================================================================
 
 Public Sub btn_DrawGantt(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "DrawGantt started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_Gantt.DrawGanttChart ActiveSheet
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "DrawGantt: " & Err.Description
     MsgBox "Draw Gantt error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_ManageBars(control As IRibbonControl)
@@ -122,22 +147,34 @@ End Sub
 ' ===========================================================================
 
 Public Sub btn_CreatePMS(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "CreatePMS started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_PMS.CreatePMS
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "CreatePMS: " & Err.Description
     MsgBox "Create PMS error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_CreatePMSEV(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "CreatePMSEV started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_PMS.CreatePMSWithEarnedUnits
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "CreatePMSEV: " & Err.Description
     MsgBox "Create PMS (EV) error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_LockPeriod(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "LockPeriod started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     Dim ws As Worksheet
     On Error Resume Next
@@ -145,15 +182,20 @@ Public Sub btn_LockPeriod(control As IRibbonControl)
     On Error GoTo ErrHandler
     If ws Is Nothing Then
         MsgBox "Schedule sheet not found.", vbExclamation, "Protocol DEE"
-        Exit Sub
+        GoTo CleanUp
     End If
     DEE_PMS.LockPeriod ws
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "LockPeriod: " & Err.Description
     MsgBox "Lock Period error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_Snapshot(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "Snapshot started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     Dim ws As Worksheet
     On Error Resume Next
@@ -161,36 +203,54 @@ Public Sub btn_Snapshot(control As IRibbonControl)
     On Error GoTo ErrHandler
     If ws Is Nothing Then
         MsgBox "Schedule sheet not found.", vbExclamation, "Protocol DEE"
-        Exit Sub
+        GoTo CleanUp
     End If
     DEE_PMS.TakeSnapshot ws
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "Snapshot: " & Err.Description
     MsgBox "Snapshot error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_Dashboard(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "Dashboard started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_Dashboard.CreateDashboard
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "Dashboard: " & Err.Description
     MsgBox "Dashboard error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_SCurveMonthly(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "SCurveMonthly started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_SCurve.CreateSCurveMonthly
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "SCurveMonthly: " & Err.Description
     MsgBox "S-Curve error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_SmartSpread(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "SmartSpread started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_Distribute.SmartSpread
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "SmartSpread: " & Err.Description
     MsgBox "Smart Spread error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 ' ===========================================================================
@@ -198,19 +258,26 @@ End Sub
 ' ===========================================================================
 
 Public Sub btn_LoadSchedule(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "LoadSchedule started"
     On Error GoTo ErrHandler
     LoadXERSchedule
     Exit Sub
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "LoadSchedule: " & Err.Description
     MsgBox "Load Schedule error: " & Err.Description, vbCritical, "Protocol DEE"
 End Sub
 
 Public Sub btn_ExportXER(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "ExportXER started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_XERCompiler.ExportXER
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "ExportXER: " & Err.Description
     MsgBox "Export XER error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 ' ===========================================================================
@@ -218,35 +285,55 @@ End Sub
 ' ===========================================================================
 
 Public Sub btn_ScheduleAudit(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "ScheduleAudit started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_ScheduleAudit.RunDCMAaudit
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "ScheduleAudit: " & Err.Description
     MsgBox "DCMA Audit error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_CPM(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "CPMAnalysis started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_CPM.RunCPMAnalysis
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "CPMAnalysis: " & Err.Description
     MsgBox "CPM Analysis error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_LookAhead2W(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "LookAhead2W started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_Reporting.CreateLookAhead2W
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "LookAhead2W: " & Err.Description
     MsgBox "Look-Ahead error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_LookAhead4W(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "LookAhead4W started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_Reporting.CreateLookAhead4W
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "LookAhead4W: " & Err.Description
     MsgBox "Look-Ahead error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 ' ===========================================================================
@@ -284,11 +371,16 @@ ErrHandler:
 End Sub
 
 Public Sub btn_DataQuality(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "DataQuality started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_DataQuality.RunDataQualityChecks
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "DataQuality: " & Err.Description
     MsgBox "Data Quality error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 ' ===========================================================================
@@ -296,26 +388,38 @@ End Sub
 ' ===========================================================================
 
 Public Sub btn_LoadBaseline(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "LoadBaseline started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_BaselineCompare.LoadBaseline
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "LoadBaseline: " & Err.Description
     MsgBox "Load Baseline error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_CompareBaseline(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "CompareBaseline started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_BaselineCompare.CompareBaseline
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "CompareBaseline: " & Err.Description
     MsgBox "Compare Baseline error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_ClearBaseline(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "ClearBaseline started"
     On Error GoTo ErrHandler
     DEE_BaselineCompare.ClearBaseline
     Exit Sub
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "ClearBaseline: " & Err.Description
     MsgBox "Clear Baseline error: " & Err.Description, vbCritical, "Protocol DEE"
 End Sub
 
@@ -324,11 +428,16 @@ End Sub
 ' ===========================================================================
 
 Public Sub btn_SaveVersion(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "SaveVersion started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_VersionHistory.SaveVersion
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "SaveVersion: " & Err.Description
     MsgBox "Save Version error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_ShowHistory(control As IRibbonControl)
@@ -344,11 +453,16 @@ End Sub
 ' ===========================================================================
 
 Public Sub btn_CompareSnapshots(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "CompareSnapshots started"
+    DEE_Perf.EnterHeavyMode
     On Error GoTo ErrHandler
     DEE_AuditTrail.CompareSnapshots
-    Exit Sub
+    GoTo CleanUp
 ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "CompareSnapshots: " & Err.Description
     MsgBox "Compare Snapshots error: " & Err.Description, vbCritical, "Protocol DEE"
+CleanUp:
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 Public Sub btn_ShowAuditLog(control As IRibbonControl)
@@ -373,7 +487,6 @@ End Sub
 
 ' ===========================================================================
 ' SMART IMPORT PIPELINE -- LoadXERSchedule
-' (Section 9 -- Smart XER Import Pipeline)
 ' ===========================================================================
 Public Sub LoadXERSchedule()
     ' -----------------------------------------------------------------------
@@ -381,7 +494,12 @@ Public Sub LoadXERSchedule()
     ' -----------------------------------------------------------------------
     Dim filePath As String
     filePath = DEE_XERParser.GetXERFilePath()
-    If filePath = "" Then Exit Sub  ' User cancelled
+    If filePath = "" Then Exit Sub
+
+    DEE_Perf.EnterHeavyMode
+    DEE_Logger.LogInfo "DEE_Main", "LoadXERSchedule: " & filePath
+
+    On Error GoTo ErrHandler
 
     ' -----------------------------------------------------------------------
     ' Step 2: Parse XER into memory
@@ -391,12 +509,12 @@ Public Sub LoadXERSchedule()
     Dim success As Boolean
     success = DEE_XERParser.ParseXERFile(filePath)
     If Not success Then
-        DEE_Utils.EndProgress
-        Exit Sub
+        DEE_Logger.LogError "DEE_Main", "ParseXERFile failed: " & filePath
+        GoTo CleanUp
     End If
 
     ' -----------------------------------------------------------------------
-    ' Step 3: Run data quality checks (optional but recommended)
+    ' Step 3: Optional data quality pre-check
     ' -----------------------------------------------------------------------
     Dim runDQ As Integer
     runDQ = MsgBox("Run data quality checks before importing?", _
@@ -416,10 +534,8 @@ Public Sub LoadXERSchedule()
 
     If Not IsEmpty(projects) And UBound(projects) >= 0 Then
         If UBound(projects) = 0 Then
-            ' Single project -- auto-select
             selectedProjId = CStr(projects(0)(0))
         Else
-            ' Multiple projects -- let user pick
             Dim projList As String
             projList = "Multiple projects found. Enter number to select:" & vbCrLf & vbCrLf
             Dim p As Integer
@@ -429,22 +545,18 @@ Public Sub LoadXERSchedule()
 
             Dim choice As String
             choice = InputBox(projList, "Select Project", "1")
-            If choice = "" Then
-                DEE_Utils.EndProgress
-                Exit Sub
-            End If
+            If choice = "" Then GoTo CleanUp
 
             Dim choiceNum As Integer
             On Error Resume Next
             choiceNum = CInt(choice) - 1
-            On Error GoTo 0
+            On Error GoTo ErrHandler
 
             If choiceNum >= 0 And choiceNum <= UBound(projects) Then
                 selectedProjId = CStr(projects(choiceNum)(0))
             Else
                 MsgBox "Invalid selection.", vbExclamation, "Protocol DEE"
-                DEE_Utils.EndProgress
-                Exit Sub
+                GoTo CleanUp
             End If
         End If
     End If
@@ -456,7 +568,7 @@ Public Sub LoadXERSchedule()
     availableFields = DEE_XERParser.GetAvailableBudgetFields()
 
     Dim budgetField As String
-    budgetField = "budget_qty"  ' Default
+    budgetField = "budget_qty"
 
     If Not IsEmpty(availableFields) And UBound(availableFields) >= 0 Then
         Dim fieldList As String
@@ -469,16 +581,12 @@ Public Sub LoadXERSchedule()
 
         Dim fieldChoice As String
         fieldChoice = InputBox(fieldList, "Select Budget Field", "1")
-
-        If fieldChoice = "" Then
-            DEE_Utils.EndProgress
-            Exit Sub
-        End If
+        If fieldChoice = "" Then GoTo CleanUp
 
         Dim fieldChoiceNum As Integer
         On Error Resume Next
         fieldChoiceNum = CInt(fieldChoice)
-        On Error GoTo 0
+        On Error GoTo ErrHandler
 
         If fieldChoiceNum = 0 Then
             budgetField = ""
@@ -515,9 +623,17 @@ Public Sub LoadXERSchedule()
     ' -----------------------------------------------------------------------
     DEE_Utils.UpdateProgress 60, "Building Schedule hierarchy"
     DEE_ScheduleBuilder.BuildSchedule budgetField, selectedProjId
+    DEE_Logger.LogInfo "DEE_Main", "LoadXERSchedule complete"
 
-    ' (BuildSchedule handles steps 8-9: auto-apply colors, freeze, completion msg)
+    GoTo CleanUp
+
+ErrHandler:
+    DEE_Logger.LogError "DEE_Main", "LoadXERSchedule: " & Err.Description
+    MsgBox "Load Schedule error: " & Err.Description, vbCritical, "Protocol DEE"
+
+CleanUp:
     DEE_Utils.EndProgress
+    DEE_Perf.ExitHeavyMode
 End Sub
 
 ' ===========================================================================
@@ -542,7 +658,6 @@ Private Sub CopyToLastRow()
     Dim sourceValue As Variant
     sourceValue = ws.Cells(startRow, col).Value
 
-    ' Find last non-empty row in this column
     Dim lastRow As Long
     lastRow = ws.Cells(ws.Rows.Count, col).End(xlUp).Row
 

@@ -109,6 +109,22 @@
                   onAction="btn_DataQuality" imageMso="ReviewCheckDocument" />
           <button id="btnSettings" label="Settings" size="normal"
                   onAction="btn_Settings" imageMso="ToolsOptions" />
+          <button id="btnExportLog" label="Export Log" size="normal"
+                  onAction="btn_ExportLog" imageMso="ExportExcelTable" />
+        </group>
+
+        <!-- Governance Group -->
+        <group id="grpGovernance" label="Governance">
+          <button id="btnLockFields" label="Lock Fields" size="large"
+                  onAction="btn_LockFields" imageMso="ProtectSheet" />
+          <button id="btnUnlockFields" label="Unlock Fields" size="normal"
+                  onAction="btn_UnlockFields" imageMso="UnProtectSheet" />
+          <button id="btnDataDate" label="Set Data Date" size="large"
+                  onAction="btn_DataDate" imageMso="CalendarView" />
+          <button id="btnExportAudit" label="Export Audit" size="normal"
+                  onAction="btn_ExportAudit" imageMso="ExportTextFile" />
+          <button id="btnForceReset" label="Force Reset" size="normal"
+                  onAction="btn_ForceReset" imageMso="Refresh" />
         </group>
 
       </tab>

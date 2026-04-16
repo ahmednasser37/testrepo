@@ -87,6 +87,19 @@ Public Sub RunDCMAaudit()
     taskConstraintIdx = DEE_XERParser.FindFieldIndex(taskFields, "cstr_type")
     taskFloatIdx = DEE_XERParser.FindFieldIndex(taskFields, "total_float_hr_cnt")
 
+    ' Load configurable thresholds from DEE_Settings
+    Dim tHighFloatDays As Double:  tHighFloatDays  = DEE_Settings.GetDCMAThreshold("HighFloatDays")
+    Dim tHighDurDays   As Double:  tHighDurDays    = DEE_Settings.GetDCMAThreshold("HighDurDays")
+    Dim tMissingPred   As Double:  tMissingPred    = DEE_Settings.GetDCMAThreshold("MissingPred")
+    Dim tMissingSucc   As Double:  tMissingSucc    = DEE_Settings.GetDCMAThreshold("MissingSucc")
+    Dim tFSPct         As Double:  tFSPct          = DEE_Settings.GetDCMAThreshold("FSPct")
+    Dim tLagPct        As Double:  tLagPct         = DEE_Settings.GetDCMAThreshold("LagPct")
+    Dim tConstraintPct As Double:  tConstraintPct  = DEE_Settings.GetDCMAThreshold("ConstraintPct")
+    Dim tHighFloatPct  As Double:  tHighFloatPct   = DEE_Settings.GetDCMAThreshold("HighFloatPct")
+    Dim tHighDurPct    As Double:  tHighDurPct     = DEE_Settings.GetDCMAThreshold("HighDurPct")
+    Dim tResourcePct   As Double:  tResourcePct    = DEE_Settings.GetDCMAThreshold("ResourcePct")
+    Dim tCPLI          As Double:  tCPLI           = DEE_Settings.GetDCMAThreshold("CPLI")
+
     ' Build task ID set and stats
     Dim taskIdSet As Object
     Set taskIdSet = CreateObject("Scripting.Dictionary")
@@ -166,7 +179,7 @@ Public Sub RunDCMAaudit()
         End If
         Dim floatDays As Double
         floatDays = floatHrs / 8  ' Convert hours to days (8-hr work day)
-        If floatDays > 44 Then tasksWithHighFloat = tasksWithHighFloat + 1
+        If floatDays > tHighFloatDays Then tasksWithHighFloat = tasksWithHighFloat + 1
         If floatHrs < 0 Then tasksWithNegFloat = tasksWithNegFloat + 1
 
         ' Duration
@@ -176,7 +189,7 @@ Public Sub RunDCMAaudit()
             durHrs = CDbl(tr(taskDurIdx))
             On Error GoTo 0
         End If
-        If (durHrs / 8) > 44 Then tasksWithHighDur = tasksWithHighDur + 1
+        If (durHrs / 8) > tHighDurDays Then tasksWithHighDur = tasksWithHighDur + 1
 
         ' Missed activities (past data date but not complete)
         If Not IsEmpty(tEnd) Then
@@ -352,6 +365,19 @@ Private Sub WriteAuditResults(ws As Worksheet, activeTasks As Long, _
 
     DEE_Utils.ApplyTableHeader ws, headerRow, 1, 7
 
+    ' Read thresholds from settings
+    Dim sMissingPred   As Double: sMissingPred   = DEE_Settings.GetDCMAThreshold("MissingPred")
+    Dim sMissingSucc   As Double: sMissingSucc   = DEE_Settings.GetDCMAThreshold("MissingSucc")
+    Dim sFSPct         As Double: sFSPct         = DEE_Settings.GetDCMAThreshold("FSPct")
+    Dim sLagPct        As Double: sLagPct        = DEE_Settings.GetDCMAThreshold("LagPct")
+    Dim sConstraintPct As Double: sConstraintPct = DEE_Settings.GetDCMAThreshold("ConstraintPct")
+    Dim sHighFloatPct  As Double: sHighFloatPct  = DEE_Settings.GetDCMAThreshold("HighFloatPct")
+    Dim sHighDurPct    As Double: sHighDurPct    = DEE_Settings.GetDCMAThreshold("HighDurPct")
+    Dim sResourcePct   As Double: sResourcePct   = DEE_Settings.GetDCMAThreshold("ResourcePct")
+    Dim sCPLI          As Double: sCPLI          = DEE_Settings.GetDCMAThreshold("CPLI")
+    Dim sHighFloatDays As Double: sHighFloatDays = DEE_Settings.GetDCMAThreshold("HighFloatDays")
+    Dim sHighDurDays   As Double: sHighDurDays   = DEE_Settings.GetDCMAThreshold("HighDurDays")
+
     ' Define checks
     Dim checks(0 To 13) As String
     Dim counts(0 To 13) As Long
@@ -361,28 +387,28 @@ Private Sub WriteAuditResults(ws As Worksheet, activeTasks As Long, _
     ' Check 1: Missing predecessors
     checks(0) = "Logic - Missing Predecessors"
     counts(0) = missingPred
-    thresholds(0) = "< 5%"
-    passConditions(0) = (activeTasks > 0 And (CDbl(missingPred) / activeTasks) < 0.05)
+    thresholds(0) = "< " & Format(sMissingPred, "0%")
+    passConditions(0) = (activeTasks > 0 And (CDbl(missingPred) / activeTasks) < sMissingPred)
 
     ' Check 2: Missing successors
     checks(1) = "Logic - Missing Successors"
     counts(1) = missingSucc
-    thresholds(1) = "< 5%"
-    passConditions(1) = (activeTasks > 0 And (CDbl(missingSucc) / activeTasks) < 0.05)
+    thresholds(1) = "< " & Format(sMissingSucc, "0%")
+    passConditions(1) = (activeTasks > 0 And (CDbl(missingSucc) / activeTasks) < sMissingSucc)
 
     ' Check 3: FS relationship types
     Dim nonFsRel As Long
     nonFsRel = totalRel - fsRel
     checks(2) = "Relationship Types (non-FS)"
     counts(2) = nonFsRel
-    thresholds(2) = "> 90% FS"
-    passConditions(2) = (totalRel > 0 And (CDbl(fsRel) / totalRel) >= 0.9)
+    thresholds(2) = ">= " & Format(sFSPct, "0%") & " FS"
+    passConditions(2) = (totalRel > 0 And (CDbl(fsRel) / totalRel) >= sFSPct)
 
     ' Check 4: Lags
     checks(3) = "Lags"
     counts(3) = lagsCount
-    thresholds(3) = "< 5%"
-    passConditions(3) = (totalRel > 0 And (CDbl(lagsCount) / totalRel) < 0.05)
+    thresholds(3) = "< " & Format(sLagPct, "0%")
+    passConditions(3) = (totalRel > 0 And (CDbl(lagsCount) / totalRel) < sLagPct)
 
     ' Check 5: Leads (negative lags)
     checks(4) = "Leads (Negative Lags)"
@@ -399,14 +425,14 @@ Private Sub WriteAuditResults(ws As Worksheet, activeTasks As Long, _
     ' Check 7: Hard constraints
     checks(6) = "Hard Constraints"
     counts(6) = hardConstraints
-    thresholds(6) = "< 5%"
-    passConditions(6) = (activeTasks > 0 And (CDbl(hardConstraints) / activeTasks) < 0.05)
+    thresholds(6) = "< " & Format(sConstraintPct, "0%")
+    passConditions(6) = (activeTasks > 0 And (CDbl(hardConstraints) / activeTasks) < sConstraintPct)
 
     ' Check 8: High float
-    checks(7) = "High Float (TF > 44 days)"
+    checks(7) = "High Float (TF > " & Format(sHighFloatDays, "0") & " days)"
     counts(7) = highFloat
-    thresholds(7) = "< 5%"
-    passConditions(7) = (activeTasks > 0 And (CDbl(highFloat) / activeTasks) < 0.05)
+    thresholds(7) = "< " & Format(sHighFloatPct, "0%")
+    passConditions(7) = (activeTasks > 0 And (CDbl(highFloat) / activeTasks) < sHighFloatPct)
 
     ' Check 9: Negative float
     checks(8) = "Negative Float"
@@ -415,10 +441,10 @@ Private Sub WriteAuditResults(ws As Worksheet, activeTasks As Long, _
     passConditions(8) = (negFloat = 0)
 
     ' Check 10: High duration
-    checks(9) = "High Duration (> 44 days)"
+    checks(9) = "High Duration (> " & Format(sHighDurDays, "0") & " days)"
     counts(9) = highDur
-    thresholds(9) = "< 5%"
-    passConditions(9) = (activeTasks > 0 And (CDbl(highDur) / activeTasks) < 0.05)
+    thresholds(9) = "< " & Format(sHighDurPct, "0%")
+    passConditions(9) = (activeTasks > 0 And (CDbl(highDur) / activeTasks) < sHighDurPct)
 
     ' Check 11: Invalid dates
     checks(10) = "Invalid Dates"
@@ -429,8 +455,8 @@ Private Sub WriteAuditResults(ws As Worksheet, activeTasks As Long, _
     ' Check 12: Resources assigned
     checks(11) = "Resources Assigned"
     counts(11) = withResources
-    thresholds(11) = "> 90%"
-    passConditions(11) = (activeTasks > 0 And (CDbl(withResources) / activeTasks) >= 0.9)
+    thresholds(11) = ">= " & Format(sResourcePct, "0%")
+    passConditions(11) = (activeTasks > 0 And (CDbl(withResources) / activeTasks) >= sResourcePct)
 
     ' Check 13: Missed activities
     checks(12) = "Missed Activities (Past DD)"
@@ -441,8 +467,8 @@ Private Sub WriteAuditResults(ws As Worksheet, activeTasks As Long, _
     ' Check 14: CPLI
     checks(13) = "Critical Path Length Index (CPLI)"
     counts(13) = 0  ' N/A without CPM
-    thresholds(13) = ">= 0.95"
-    passConditions(13) = (cpli >= 0.95 Or cpli = 0)  ' 0 = not computed yet
+    thresholds(13) = ">= " & Format(sCPLI, "0.00")
+    passConditions(13) = (cpli >= sCPLI Or cpli = 0)  ' 0 = not computed yet
 
     ' Write rows
     Dim dataRow As Integer

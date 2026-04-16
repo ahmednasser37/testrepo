@@ -486,6 +486,140 @@ ErrHandler:
 End Sub
 
 ' ===========================================================================
+' GOVERNANCE GROUP CALLBACKS
+' ===========================================================================
+
+Public Sub btn_LockFields(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "LockFields started"
+    On Error GoTo ErrHandler
+    LockScheduleInputColumns True
+    Exit Sub
+ErrHandler:
+    MsgBox "Lock Fields error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+Public Sub btn_UnlockFields(control As IRibbonControl)
+    DEE_Logger.LogInfo "DEE_Main", "UnlockFields started"
+    On Error GoTo ErrHandler
+    LockScheduleInputColumns False
+    Exit Sub
+ErrHandler:
+    MsgBox "Unlock Fields error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+Public Sub btn_DataDate(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    Dim dd As String
+    dd = InputBox("Enter Data Date (YYYY-MM-DD):", "Set Data Date", Format(Date, "yyyy-mm-dd"))
+    If dd = "" Then Exit Sub
+    Dim parsedDate As Date
+    On Error Resume Next
+    parsedDate = DEE_Utils.SafeParseDate(dd)
+    On Error GoTo ErrHandler
+    If parsedDate = 0 Then
+        MsgBox "Invalid date format. Use YYYY-MM-DD.", vbExclamation, "Protocol DEE"
+        Exit Sub
+    End If
+    SetDataDateIndicator parsedDate
+    Exit Sub
+ErrHandler:
+    MsgBox "Set Data Date error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+Public Sub btn_ExportAudit(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    DEE_AuditTrail.ExportAuditCSV
+    Exit Sub
+ErrHandler:
+    MsgBox "Export Audit error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+Public Sub btn_ExportLog(control As IRibbonControl)
+    On Error GoTo ErrHandler
+    DEE_Logger.ExportLog
+    Exit Sub
+ErrHandler:
+    MsgBox "Export Log error: " & Err.Description, vbCritical, "Protocol DEE"
+End Sub
+
+Public Sub btn_ForceReset(control As IRibbonControl)
+    Dim confirm As Integer
+    confirm = MsgBox("Force-reset all application state?" & vbCrLf & _
+                     "Use this only after a crash or frozen state.", _
+                     vbYesNo + vbQuestion, "Protocol DEE")
+    If confirm = vbYes Then
+        DEE_Perf.ForceReset
+        DEE_Logger.LogWarn "DEE_Main", "ForceReset executed by user"
+        MsgBox "Application state reset.", vbInformation, "Protocol DEE"
+    End If
+End Sub
+
+' ---------------------------------------------------------------------------
+' LockScheduleInputColumns -- Protect/unprotect specific input columns
+' ---------------------------------------------------------------------------
+Private Sub LockScheduleInputColumns(lockMode As Boolean)
+    Dim wb As Workbook
+    Set wb = ActiveWorkbook
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = wb.Worksheets(DEE_Config.SHEET_SCHEDULE)
+    On Error GoTo 0
+    If ws Is Nothing Then
+        MsgBox "Schedule sheet not found.", vbExclamation, "Protocol DEE"
+        Exit Sub
+    End If
+
+    If lockMode Then
+        ws.Protect Password:="", UserInterfaceOnly:=True, DrawingObjects:=False, _
+                   Contents:=True, AllowFormattingCells:=True, _
+                   AllowSorting:=True, AllowFiltering:=True
+        MsgBox "Schedule locked. Only input columns can be edited.", vbInformation, "Protocol DEE"
+        DEE_Logger.LogInfo "DEE_Main", "Schedule sheet locked"
+    Else
+        ws.Unprotect Password:=""
+        MsgBox "Schedule unlocked.", vbInformation, "Protocol DEE"
+        DEE_Logger.LogInfo "DEE_Main", "Schedule sheet unlocked"
+    End If
+End Sub
+
+' ---------------------------------------------------------------------------
+' SetDataDateIndicator -- Write a visible data-date marker row on the Schedule
+' ---------------------------------------------------------------------------
+Private Sub SetDataDateIndicator(dataDate As Date)
+    Dim wb As Workbook
+    Set wb = ActiveWorkbook
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = wb.Worksheets(DEE_Config.SHEET_SCHEDULE)
+    On Error GoTo 0
+    If ws Is Nothing Then Exit Sub
+
+    ' Store in CustomDocumentProperty for use by other modules
+    On Error Resume Next
+    wb.CustomDocumentProperties("DEE_DataDate").Delete
+    wb.CustomDocumentProperties.Add "DEE_DataDate", False, msoPropertyTypeDate, dataDate
+    On Error GoTo 0
+
+    ' Update cell A1 title area to show data date
+    Dim dataDateStr As String
+    dataDateStr = "Data Date: " & Format(dataDate, "dd-MMM-yyyy")
+
+    ' Write in a note row if row 1 is a title
+    Dim notesCell As Range
+    Set notesCell = ws.Cells(1, 1)
+    If InStr(notesCell.Value, "Data Date:") > 0 Then
+        notesCell.Value = dataDateStr
+    ElseIf notesCell.Value = "" Then
+        notesCell.Value = dataDateStr
+        notesCell.Font.Bold = True
+        notesCell.Font.Color = RGB(0, 112, 192)
+    End If
+
+    DEE_Logger.LogInfo "DEE_Main", "Data Date set: " & Format(dataDate, "yyyy-mm-dd")
+    MsgBox "Data Date set to: " & Format(dataDate, "dd-MMM-yyyy"), vbInformation, "Protocol DEE"
+End Sub
+
+' ===========================================================================
 ' SMART IMPORT PIPELINE -- LoadXERSchedule
 ' ===========================================================================
 Public Sub LoadXERSchedule()

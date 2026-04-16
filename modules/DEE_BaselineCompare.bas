@@ -2,87 +2,113 @@ Attribute VB_Name = "DEE_BaselineCompare"
 Option Explicit
 
 ' =============================================================================
-' DEE_BaselineCompare.bas -- Baseline Comparison (Section 15.14)
+' DEE_BaselineCompare.bas -- Baseline Comparison (P1 rewrite)
 ' Protocol DEE v2 -- Project Controls Add-in
 ' =============================================================================
-' Loads a second XER file as a baseline and compares it against the current
-' Schedule sheet. Outputs a side-by-side diff sheet with slip indicators.
+' Loads a Primavera XER file as a named baseline. Multiple named baselines
+' are supported. Each baseline is stored as a hidden sheet prefixed
+' "_DEE_Baseline_<name>" and its file path is persisted in CustomDocumentProperties.
 '
-' STORAGE MODEL: Baseline stored as hidden sheet "_DEE_Baseline" with same
-' A-F layout as Schedule. Survives workbook save/reopen without re-import.
+' COMPARE OUTPUT: "Baseline_Variance" sheet with columns:
+'   A  task_code
+'   B  task_name
+'   C  BL Start        D  BL Finish        E  BL Duration
+'   F  ACT Start       G  ACT Finish       H  ACT Duration
+'   I  Start Slip (d)  J  Finish Slip (d)  K  Duration Delta
+'   L  Status flag     M  % Complete       N  Notes
 '
-' COLOR CODING:
-'   Green  = on track (0 day slip)
-'   Yellow = minor slip (1-5 days)
-'   Red    = major slip (> 5 days)
-'   Blue   = new activity (not in baseline)
-'   Gray   = removed activity (in baseline, not in current)
+' STATUS FLAGS:
+'   NEW          -- activity exists in current but not in baseline
+'   DELETED      -- activity exists in baseline but not in current
+'   ON_TRACK     -- finish slip <= 0 days
+'   SLIPPED      -- finish slip > 0 (positive = later)
+'   AHEAD        -- finish slip < 0 (negative = earlier)
+'   LOGIC_CHANGED -- predecessor list differs between baseline and current
 ' =============================================================================
 
-Private Const BASELINE_SHEET As String = "_DEE_Baseline"
+Private Const CDP_PREFIX      As String = "DEE_Baseline_"  ' CustomDocumentProperty prefix
+Private Const SH_PREFIX       As String = "_DEE_Baseline_" ' Sheet name prefix
 
-Private Const COLOR_ON_TRACK  As Long = RGB(0, 176, 80)
-Private Const COLOR_MINOR     As Long = RGB(255, 192, 0)
-Private Const COLOR_MAJOR     As Long = RGB(255, 0, 0)
-Private Const COLOR_NEW       As Long = RGB(0, 112, 192)
-Private Const COLOR_REMOVED   As Long = RGB(191, 191, 191)
+Private Const COL_BL_CODE     As Integer = 1
+Private Const COL_BL_NAME     As Integer = 2
+Private Const COL_BL_START    As Integer = 3
+Private Const COL_BL_FINISH   As Integer = 4
+Private Const COL_BL_DUR      As Integer = 5
+Private Const COL_BL_PCT      As Integer = 6
+Private Const COL_BL_PRED     As Integer = 7
+
+Private Const COLOR_ON_TRACK  As Long = RGB(0,   176,  80)
+Private Const COLOR_SLIPPED   As Long = RGB(255,   0,   0)
+Private Const COLOR_AHEAD     As Long = RGB(0,   112, 192)
+Private Const COLOR_NEW       As Long = RGB(146, 208,  80)
+Private Const COLOR_DELETED   As Long = RGB(191, 191, 191)
+Private Const COLOR_LOGIC     As Long = RGB(255, 192,   0)
 
 ' ---------------------------------------------------------------------------
-' LoadBaseline -- Import a XER file and store as hidden baseline sheet
+' LoadBaseline -- Pick a XER, parse it, ask for a name, store hidden
 ' ---------------------------------------------------------------------------
 Public Sub LoadBaseline()
-    ' File picker
     Dim filePath As String
     filePath = DEE_XERParser.GetXERFilePath()
     If filePath = "" Then Exit Sub
 
-    DEE_Utils.StartProgress "Loading Baseline XER"
+    Dim baselineName As String
+    baselineName = InputBox("Enter a name for this baseline:" & vbCrLf & "(e.g. B1, Tender, Contract)", _
+                            "Load Baseline", "B1")
+    If Trim(baselineName) = "" Then Exit Sub
+    baselineName = Left(Trim(baselineName), 30)
 
-    ' Parse XER
+    DEE_Logger.LogInfo "DEE_BaselineCompare", "LoadBaseline: " & baselineName & " from " & filePath
+    DEE_Utils.StartProgress "Loading Baseline: " & baselineName
+
     Dim success As Boolean
     success = DEE_XERParser.ParseXERFile(filePath)
-    If Not success Then DEE_Utils.EndProgress: Exit Sub
+    If Not success Then
+        DEE_Utils.EndProgress
+        MsgBox "Failed to parse XER file.", vbCritical, "Protocol DEE"
+        Exit Sub
+    End If
 
-    ' Build baseline schedule in memory using ScheduleBuilder logic
     Dim wb As Workbook
     Set wb = ActiveWorkbook
 
-    ' Remove existing baseline sheet
-    Application.DisplayAlerts = False
-    On Error Resume Next
-    wb.Worksheets(BASELINE_SHEET).Delete
-    On Error GoTo 0
-    Application.DisplayAlerts = True
+    ' Remove old sheet with same name if it exists
+    Dim sheetName As String
+    sheetName = SH_PREFIX & baselineName
+    DeleteSheetIfExists wb, sheetName
 
-    ' Create hidden baseline sheet
-    Dim wsBL As Worksheet
-    Set wsBL = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
-    wsBL.Name = BASELINE_SHEET
-    wsBL.Visible = xlSheetVeryHidden  ' Hidden from user -- not even in sheet tab list
+    ' Build the baseline data sheet
+    Dim ws As Worksheet
+    Set ws = wb.Worksheets.Add
+    ws.Name = sheetName
+    ws.Visible = xlSheetVeryHidden
 
-    ' Write header
-    wsBL.Cells(1, 1).Value = "Activity ID"
-    wsBL.Cells(1, 2).Value = "Activity Name"
-    wsBL.Cells(1, 3).Value = "BL Start"
-    wsBL.Cells(1, 4).Value = "BL Finish"
-    wsBL.Cells(1, 5).Value = "BL Budget"
-    wsBL.Cells(1, 6).Value = "BL Budget"
+    BuildBaselineSheet ws
 
-    ' Use DEE_ScheduleBuilder to populate baseline sheet
-    ' We temporarily rename it to "Schedule" to reuse the builder, then rename back
-    ' Safer: directly call the build logic into wsBL
-    BuildBaselineSheet wsBL
+    ' Persist file path in CustomDocumentProperties for reference
+    StoreBaselineCDP wb, baselineName, filePath
 
     DEE_Utils.EndProgress
-    MsgBox "Baseline loaded: " & wb.Worksheets(BASELINE_SHEET).UsedRange.Rows.Count - 1 & _
-           " rows stored." & vbCrLf & "Run 'Compare Baseline' to see the diff.", _
-           vbInformation, "Protocol DEE -- Baseline Loaded"
+    DEE_Logger.LogInfo "DEE_BaselineCompare", "Baseline '" & baselineName & "' stored on sheet " & sheetName
+
+    MsgBox "Baseline '" & baselineName & "' loaded successfully." & vbCrLf & _
+           "Activities stored: " & (DEE_Utils.LastRow(ws, 1) - 1), _
+           vbInformation, "Protocol DEE"
 End Sub
 
 ' ---------------------------------------------------------------------------
-' BuildBaselineSheet -- Populate baseline sheet from parsed XER (reuses parser globals)
+' BuildBaselineSheet -- Extract TASK rows from parsed XER into hidden sheet
 ' ---------------------------------------------------------------------------
 Private Sub BuildBaselineSheet(ws As Worksheet)
+    ' Write header
+    ws.Cells(1, COL_BL_CODE).Value   = "task_code"
+    ws.Cells(1, COL_BL_NAME).Value   = "task_name"
+    ws.Cells(1, COL_BL_START).Value  = "target_start_date"
+    ws.Cells(1, COL_BL_FINISH).Value = "target_end_date"
+    ws.Cells(1, COL_BL_DUR).Value    = "target_drtn_hr_cnt"
+    ws.Cells(1, COL_BL_PCT).Value    = "phys_complete_pct"
+    ws.Cells(1, COL_BL_PRED).Value   = "predecessors"
+
     If Not DEE_XERParser.TableExists("TASK") Then Exit Sub
 
     Dim taskFields As Variant
@@ -90,333 +116,553 @@ Private Sub BuildBaselineSheet(ws As Worksheet)
     Dim taskRows As Collection
     Set taskRows = DEE_XERParser.GetTable("TASK")
 
-    Dim taskCodeIdx As Integer
-    Dim taskNameIdx As Integer
-    Dim taskStartIdx As Integer
-    Dim taskEndIdx As Integer
-    Dim taskBudgetIdx As Integer
-    Dim taskTypeIdx As Integer
+    Dim codeIdx As Integer:  codeIdx  = DEE_XERParser.FindFieldIndex(taskFields, "task_code")
+    Dim nameIdx As Integer:  nameIdx  = DEE_XERParser.FindFieldIndex(taskFields, "task_name")
+    Dim startIdx As Integer: startIdx = DEE_XERParser.FindFieldIndex(taskFields, "target_start_date")
+    Dim endIdx As Integer:   endIdx   = DEE_XERParser.FindFieldIndex(taskFields, "target_end_date")
+    Dim durIdx As Integer:   durIdx   = DEE_XERParser.FindFieldIndex(taskFields, "target_drtn_hr_cnt")
+    Dim pctIdx As Integer:   pctIdx   = DEE_XERParser.FindFieldIndex(taskFields, "phys_complete_pct")
 
-    taskCodeIdx  = DEE_XERParser.FindFieldIndex(taskFields, "task_code")
-    taskNameIdx  = DEE_XERParser.FindFieldIndex(taskFields, "task_name")
-    taskStartIdx = DEE_XERParser.FindFieldIndex(taskFields, "target_start_date")
-    taskEndIdx   = DEE_XERParser.FindFieldIndex(taskFields, "target_end_date")
-    taskBudgetIdx = DEE_XERParser.FindFieldIndex(taskFields, "budget_qty")
-    taskTypeIdx  = DEE_XERParser.FindFieldIndex(taskFields, "task_type")
+    ' Build predecessor map from TASKPRED
+    Dim predMap As Object
+    Set predMap = BuildPredMap()
 
-    Dim dataArr() As Variant
-    ReDim dataArr(0 To taskRows.Count, 0 To 5)
-    Dim rowIdx As Long
-    rowIdx = 0
-
+    Dim r As Long
+    r = 2
     Dim taskRow As Variant
     For Each taskRow In taskRows
         Dim tr As Variant
         tr = taskRow
 
-        Dim tType As String
-        If taskTypeIdx >= 0 And taskTypeIdx <= UBound(tr) Then tType = Trim(tr(taskTypeIdx))
-        If tType = "TT_WBS" Then GoTo NextBLTask
-
         Dim tCode As String
+        If codeIdx >= 0 And codeIdx <= UBound(tr) Then tCode = Trim(CStr(tr(codeIdx)))
+        If tCode = "" Then GoTo NextRow
+
         Dim tName As String
-        If taskCodeIdx >= 0 And taskCodeIdx <= UBound(tr) Then tCode = Trim(tr(taskCodeIdx))
-        If taskNameIdx >= 0 And taskNameIdx <= UBound(tr) Then tName = Trim(tr(taskNameIdx))
+        If nameIdx >= 0 And nameIdx <= UBound(tr) Then tName = Trim(CStr(tr(nameIdx)))
 
-        Dim tStart As Variant
-        Dim tEnd As Variant
-        If taskStartIdx >= 0 And taskStartIdx <= UBound(tr) Then
-            tStart = DEE_Utils.SafeParseDate(CStr(tr(taskStartIdx)))
-        End If
-        If taskEndIdx >= 0 And taskEndIdx <= UBound(tr) Then
-            tEnd = DEE_Utils.SafeParseDate(CStr(tr(taskEndIdx)))
-        End If
+        Dim tStart As Date
+        Dim tEnd As Date
+        Dim tDur As Double
+        Dim tPct As Double
 
-        Dim tBudget As Double
-        If taskBudgetIdx >= 0 And taskBudgetIdx <= UBound(tr) Then
+        If startIdx >= 0 And startIdx <= UBound(tr) Then
+            tStart = DEE_Utils.SafeParseDate(Trim(CStr(tr(startIdx))))
+        End If
+        If endIdx >= 0 And endIdx <= UBound(tr) Then
+            tEnd = DEE_Utils.SafeParseDate(Trim(CStr(tr(endIdx))))
+        End If
+        If durIdx >= 0 And durIdx <= UBound(tr) Then
             On Error Resume Next
-            tBudget = CDbl(tr(taskBudgetIdx))
+            tDur = CDbl(tr(durIdx)) / 8
+            On Error GoTo 0
+        End If
+        If pctIdx >= 0 And pctIdx <= UBound(tr) Then
+            On Error Resume Next
+            tPct = CDbl(tr(pctIdx))
             On Error GoTo 0
         End If
 
-        dataArr(rowIdx, 0) = tCode
-        dataArr(rowIdx, 1) = tName
-        dataArr(rowIdx, 2) = tStart
-        dataArr(rowIdx, 3) = tEnd
-        dataArr(rowIdx, 4) = tBudget
-        dataArr(rowIdx, 5) = tBudget
-        rowIdx = rowIdx + 1
-NextBLTask:
-    Next taskRow
+        ws.Cells(r, COL_BL_CODE).Value   = tCode
+        ws.Cells(r, COL_BL_NAME).Value   = tName
+        If tStart <> 0 Then ws.Cells(r, COL_BL_START).Value = tStart
+        If tEnd   <> 0 Then ws.Cells(r, COL_BL_FINISH).Value = tEnd
+        ws.Cells(r, COL_BL_DUR).Value    = tDur
+        ws.Cells(r, COL_BL_PCT).Value    = tPct
 
-    If rowIdx > 0 Then
-        ws.Range(ws.Cells(2, 1), ws.Cells(rowIdx + 1, 6)).Value = dataArr
-        ws.Columns(3).NumberFormat = "yyyy-mm-dd"
-        ws.Columns(4).NumberFormat = "yyyy-mm-dd"
-    End If
+        If predMap.Exists(tCode) Then
+            ws.Cells(r, COL_BL_PRED).Value = predMap(tCode)
+        End If
+
+        r = r + 1
+NextRow:
+    Next taskRow
 End Sub
 
 ' ---------------------------------------------------------------------------
-' CompareBaseline -- Diff current Schedule vs stored baseline
+' BuildPredMap -- task_code -> comma-separated predecessor list from TASKPRED
+' ---------------------------------------------------------------------------
+Private Function BuildPredMap() As Object
+    Dim pm As Object
+    Set pm = CreateObject("Scripting.Dictionary")
+
+    If Not DEE_XERParser.TableExists("TASKPRED") Then
+        Set BuildPredMap = pm
+        Exit Function
+    End If
+
+    Dim predFields As Variant
+    predFields = DEE_XERParser.GetFieldNames("TASKPRED")
+    Dim predRows As Collection
+    Set predRows = DEE_XERParser.GetTable("TASKPRED")
+
+    Dim succIdx As Integer: succIdx = DEE_XERParser.FindFieldIndex(predFields, "task_id")
+    Dim predIdx As Integer: predIdx = DEE_XERParser.FindFieldIndex(predFields, "pred_task_id")
+    Dim typeIdx As Integer: typeIdx = DEE_XERParser.FindFieldIndex(predFields, "pred_type")
+
+    Dim predRow As Variant
+    For Each predRow In predRows
+        Dim pr As Variant
+        pr = predRow
+
+        Dim succId As String
+        Dim predId As String
+        If succIdx >= 0 And succIdx <= UBound(pr) Then succId = Trim(CStr(pr(succIdx)))
+        If predIdx >= 0 And predIdx <= UBound(pr) Then predId = Trim(CStr(pr(predIdx)))
+        If succId = "" Or predId = "" Then GoTo NextPred
+
+        Dim rel As String
+        rel = predId
+        If typeIdx >= 0 And typeIdx <= UBound(pr) Then
+            Dim relType As String
+            relType = Trim(CStr(pr(typeIdx)))
+            If relType <> "" And relType <> "PR_FS" Then rel = predId & "(" & relType & ")"
+        End If
+
+        If pm.Exists(succId) Then
+            pm(succId) = pm(succId) & "," & rel
+        Else
+            pm(succId) = rel
+        End If
+NextPred:
+    Next predRow
+
+    Set BuildPredMap = pm
+End Function
+
+' ---------------------------------------------------------------------------
+' CompareBaseline -- Diff current Schedule vs a stored baseline
 ' ---------------------------------------------------------------------------
 Public Sub CompareBaseline()
     Dim wb As Workbook
     Set wb = ActiveWorkbook
 
-    ' Check baseline exists
-    Dim wsBL As Worksheet
-    On Error Resume Next
-    Set wsBL = wb.Worksheets(BASELINE_SHEET)
-    On Error GoTo 0
-    If wsBL Is Nothing Then
-        MsgBox "No baseline loaded. Click 'Load Baseline' first.", vbExclamation, "Protocol DEE"
+    Dim names As Variant
+    names = ListBaselineNames(wb)
+
+    If IsEmpty(names) Then
+        MsgBox "No baselines loaded. Use 'Load Baseline' first.", vbExclamation, "Protocol DEE"
         Exit Sub
     End If
 
-    ' Check Schedule exists
-    Dim wsSch As Worksheet
+    Dim baselineName As String
+    If UBound(names) = 0 Then
+        baselineName = CStr(names(0))
+    Else
+        Dim listStr As String
+        Dim i As Integer
+        For i = 0 To UBound(names)
+            listStr = listStr & (i + 1) & ") " & names(i) & vbCrLf
+        Next i
+        Dim choice As String
+        choice = InputBox("Select baseline to compare:" & vbCrLf & vbCrLf & listStr, _
+                          "Compare Baseline", "1")
+        If choice = "" Then Exit Sub
+        Dim choiceNum As Integer
+        On Error Resume Next
+        choiceNum = CInt(choice) - 1
+        On Error GoTo 0
+        If choiceNum < 0 Or choiceNum > UBound(names) Then Exit Sub
+        baselineName = CStr(names(choiceNum))
+    End If
+
+    ' Load baseline sheet
+    Dim blSheet As Worksheet
     On Error Resume Next
-    Set wsSch = wb.Worksheets("Schedule")
+    Set blSheet = wb.Worksheets(SH_PREFIX & baselineName)
     On Error GoTo 0
-    If wsSch Is Nothing Then
+
+    If blSheet Is Nothing Then
+        MsgBox "Baseline sheet not found for '" & baselineName & "'.", vbCritical, "Protocol DEE"
+        Exit Sub
+    End If
+
+    ' Load current Schedule sheet
+    Dim schedSheet As Worksheet
+    On Error Resume Next
+    Set schedSheet = wb.Worksheets(DEE_Config.SHEET_SCHEDULE)
+    On Error GoTo 0
+
+    If schedSheet Is Nothing Then
         MsgBox "Schedule sheet not found.", vbCritical, "Protocol DEE"
         Exit Sub
     End If
 
-    DEE_Utils.StartProgress "Comparing Baseline"
+    DEE_Logger.LogInfo "DEE_BaselineCompare", "CompareBaseline: " & baselineName
+    DEE_Utils.StartProgress "Comparing baseline: " & baselineName
 
-    ' Build baseline lookup: task_code -> [BL Start, BL Finish, BL Budget]
+    ' Build maps
     Dim blMap As Object
-    Set blMap = CreateObject("Scripting.Dictionary")
+    Set blMap = BuildBaselineMap(blSheet)
 
-    Dim blLastRow As Long
-    blLastRow = DEE_Utils.LastRow(wsBL, 1)
-    Dim b As Long
-    For b = 2 To blLastRow
-        Dim blCode As String
-        blCode = Trim(wsBL.Cells(b, 1).Value)
-        If blCode <> "" Then
-            blMap(blCode) = Array(wsBL.Cells(b, 3).Value, _
-                                  wsBL.Cells(b, 4).Value, _
-                                  wsBL.Cells(b, 5).Value)
-        End If
-    Next b
+    Dim actMap As Object
+    Set actMap = BuildCurrentMap(schedSheet)
 
-    ' Create comparison sheet
-    Dim wsDiff As Worksheet
-    Set wsDiff = DEE_Utils.GetOrCreateSheet(wb, "Baseline Compare")
-    wsDiff.Cells.Clear
+    ' Create output sheet
+    Dim outSheet As Worksheet
+    Set outSheet = DEE_Utils.GetOrCreateSheet(wb, DEE_Config.SHEET_BASELINE)
+    outSheet.Cells.Clear
 
-    ' Headers
-    Dim headers As Variant
-    headers = Array("Activity ID", "Activity Name", _
-                    "BL Start", "Curr Start", "Start Slip", _
-                    "BL Finish", "Curr Finish", "Finish Slip", _
-                    "BL Budget", "Curr Budget", "Budget Var", _
-                    "Status")
-    Dim h As Integer
-    For h = 0 To UBound(headers)
-        wsDiff.Cells(1, h + 1).Value = headers(h)
-    Next h
-    DEE_Utils.ApplyTableHeader wsDiff, 1, 1, UBound(headers) + 1
+    WriteVarianceHeader outSheet, baselineName
+    WriteVarianceRows outSheet, blMap, actMap
 
-    ' Title block
-    wsDiff.Rows(1).Insert
-    With wsDiff.Range("A1:L1")
-        .Merge
-        .Value = "Baseline Comparison Report -- Generated: " & Format(Now(), "yyyy-mm-dd HH:MM")
-        .Interior.Color = RGB(0, 32, 96)
-        .Font.Color = RGB(255, 255, 255)
-        .Font.Bold = True
-        .Font.Size = 11
-    End With
-
-    Dim schLastRow As Long
-    schLastRow = DEE_Utils.LastRow(wsSch, 1)
-    Dim outRow As Long
-    outRow = 3
-
-    Dim currentCodes As Object
-    Set currentCodes = CreateObject("Scripting.Dictionary")
-
-    DEE_Utils.UpdateProgress 30, "Diffing activities"
-
-    Dim i As Long
-    For i = 2 To schLastRow
-        If DEE_Utils.IsWBSRow(wsSch, i) Then GoTo NextDiff
-
-        Dim currCode As String
-        currCode = Trim(wsSch.Cells(i, 1).Value)
-        If currCode = "" Then GoTo NextDiff
-        currentCodes(currCode) = True
-
-        Dim currName As String
-        currName = Trim(wsSch.Cells(i, 2).Value)
-        Dim currStart As Variant
-        Dim currEnd As Variant
-        Dim currBudget As Double
-        currStart  = wsSch.Cells(i, 3).Value
-        currEnd    = wsSch.Cells(i, 4).Value
-        On Error Resume Next
-        currBudget = CDbl(wsSch.Cells(i, 6).Value)
-        On Error GoTo 0
-
-        ' Write row
-        wsDiff.Cells(outRow, 1).Value = currCode
-        wsDiff.Cells(outRow, 2).Value = currName
-
-        Dim rowColor As Long
-        Dim statusText As String
-
-        If blMap.Exists(currCode) Then
-            Dim blData As Variant
-            blData = blMap(currCode)
-            Dim blStart As Variant
-            Dim blEnd As Variant
-            Dim blBudget As Double
-            blStart  = blData(0)
-            blEnd    = blData(1)
-            blBudget = CDbl(blData(2))
-
-            ' Start slip
-            Dim startSlip As Long
-            startSlip = 0
-            If IsDate(currStart) And IsDate(blStart) Then
-                startSlip = CDate(currStart) - CDate(blStart)
-            End If
-
-            ' Finish slip
-            Dim finishSlip As Long
-            finishSlip = 0
-            If IsDate(currEnd) And IsDate(blEnd) Then
-                finishSlip = CDate(currEnd) - CDate(blEnd)
-            End If
-
-            ' Budget variance
-            Dim budgetVar As Double
-            budgetVar = currBudget - blBudget
-
-            wsDiff.Cells(outRow, 3).Value = blStart
-            wsDiff.Cells(outRow, 4).Value = currStart
-            wsDiff.Cells(outRow, 5).Value = startSlip
-            wsDiff.Cells(outRow, 6).Value = blEnd
-            wsDiff.Cells(outRow, 7).Value = currEnd
-            wsDiff.Cells(outRow, 8).Value = finishSlip
-            wsDiff.Cells(outRow, 9).Value = blBudget
-            wsDiff.Cells(outRow, 10).Value = currBudget
-            wsDiff.Cells(outRow, 11).Value = budgetVar
-
-            ' Determine status + color
-            Dim maxSlip As Long
-            maxSlip = IIf(Abs(startSlip) > Abs(finishSlip), Abs(startSlip), Abs(finishSlip))
-
-            If maxSlip = 0 And budgetVar = 0 Then
-                statusText = "On Track"
-                rowColor = COLOR_ON_TRACK
-            ElseIf maxSlip <= 5 And Abs(budgetVar) / IIf(blBudget > 0, blBudget, 1) < 0.1 Then
-                statusText = "Minor Slip"
-                rowColor = COLOR_MINOR
-            Else
-                statusText = "Major Slip"
-                rowColor = COLOR_MAJOR
-            End If
-
-            ' Color slip cells individually
-            If startSlip > 5 Or finishSlip > 5 Then
-                wsDiff.Cells(outRow, 5).Font.Color = RGB(255, 0, 0)
-                wsDiff.Cells(outRow, 8).Font.Color = RGB(255, 0, 0)
-            End If
-        Else
-            ' New activity (not in baseline)
-            wsDiff.Cells(outRow, 3).Value = "N/A"
-            wsDiff.Cells(outRow, 4).Value = currStart
-            wsDiff.Cells(outRow, 6).Value = "N/A"
-            wsDiff.Cells(outRow, 7).Value = currEnd
-            wsDiff.Cells(outRow, 9).Value = "N/A"
-            wsDiff.Cells(outRow, 10).Value = currBudget
-            statusText = "New"
-            rowColor = COLOR_NEW
-        End If
-
-        wsDiff.Cells(outRow, 12).Value = statusText
-        wsDiff.Cells(outRow, 12).Interior.Color = rowColor
-        wsDiff.Cells(outRow, 12).Font.Color = RGB(255, 255, 255)
-        wsDiff.Cells(outRow, 12).Font.Bold = True
-
-        outRow = outRow + 1
-NextDiff:
-    Next i
-
-    ' Write removed activities (in baseline, not in current)
-    Dim blKey As Variant
-    For Each blKey In blMap.Keys
-        Dim bk As String
-        bk = CStr(blKey)
-        If Not currentCodes.Exists(bk) Then
-            Dim removedData As Variant
-            removedData = blMap(bk)
-            wsDiff.Cells(outRow, 1).Value = bk
-            wsDiff.Cells(outRow, 2).Value = "(Removed)"
-            wsDiff.Cells(outRow, 3).Value = removedData(0)
-            wsDiff.Cells(outRow, 6).Value = removedData(1)
-            wsDiff.Cells(outRow, 9).Value = removedData(2)
-            wsDiff.Cells(outRow, 12).Value = "Removed"
-            wsDiff.Range(wsDiff.Cells(outRow, 1), wsDiff.Cells(outRow, 12)).Interior.Color = COLOR_REMOVED
-            outRow = outRow + 1
-        End If
-    Next blKey
-
-    ' Format date columns
-    wsDiff.Columns("C:D").NumberFormat = "yyyy-mm-dd"
-    wsDiff.Columns("F:G").NumberFormat = "yyyy-mm-dd"
-    wsDiff.Columns("I:K").NumberFormat = "$#,##0.00"
-    wsDiff.Columns("E:E").NumberFormat = "+0;-0;0"
-    wsDiff.Columns("H:H").NumberFormat = "+0;-0;0"
-    wsDiff.Columns("A:L").AutoFit
-
-    ' Summary legend
-    Dim legRow As Long
-    legRow = outRow + 2
-    wsDiff.Cells(legRow, 1).Value = "LEGEND:"
-    wsDiff.Cells(legRow, 1).Font.Bold = True
-    Dim legends As Variant
-    legends = Array("On Track (0 days)", "Minor Slip (1-5 days)", "Major Slip (>5 days)", "New Activity", "Removed")
-    Dim legColors As Variant
-    legColors = Array(COLOR_ON_TRACK, COLOR_MINOR, COLOR_MAJOR, COLOR_NEW, COLOR_REMOVED)
-    Dim l As Integer
-    For l = 0 To 4
-        wsDiff.Cells(legRow, l + 2).Value = legends(l)
-        wsDiff.Cells(legRow, l + 2).Interior.Color = legColors(l)
-        wsDiff.Cells(legRow, l + 2).Font.Color = RGB(255, 255, 255)
-        wsDiff.Cells(legRow, l + 2).Font.Bold = True
-    Next l
+    outSheet.Columns("A:N").AutoFit
+    outSheet.Columns("B").ColumnWidth = 40
+    outSheet.Activate
 
     DEE_Utils.EndProgress
-    wsDiff.Activate
-
-    MsgBox "Baseline comparison complete!" & vbCrLf & _
-           (outRow - 3) & " activities compared.", vbInformation, "Protocol DEE"
+    DEE_Logger.LogInfo "DEE_BaselineCompare", "CompareBaseline complete"
+    MsgBox "Baseline comparison complete. See '" & DEE_Config.SHEET_BASELINE & "' sheet.", _
+           vbInformation, "Protocol DEE"
 End Sub
 
 ' ---------------------------------------------------------------------------
-' ClearBaseline -- Remove stored baseline
+' BuildBaselineMap -- task_code -> Array(name, start, finish, dur, pred)
+' ---------------------------------------------------------------------------
+Private Function BuildBaselineMap(ws As Worksheet) As Object
+    Dim m As Object
+    Set m = CreateObject("Scripting.Dictionary")
+
+    Dim lastRow As Long
+    lastRow = DEE_Utils.LastRow(ws, 1)
+    Dim r As Long
+    For r = 2 To lastRow
+        Dim code As String
+        code = Trim(CStr(ws.Cells(r, COL_BL_CODE).Value))
+        If code <> "" Then
+            m(code) = Array( _
+                ws.Cells(r, COL_BL_NAME).Value, _
+                ws.Cells(r, COL_BL_START).Value, _
+                ws.Cells(r, COL_BL_FINISH).Value, _
+                ws.Cells(r, COL_BL_DUR).Value, _
+                ws.Cells(r, COL_BL_PCT).Value, _
+                ws.Cells(r, COL_BL_PRED).Value)
+        End If
+    Next r
+
+    Set BuildBaselineMap = m
+End Function
+
+' ---------------------------------------------------------------------------
+' BuildCurrentMap -- task_code -> Array(name, start, finish, dur, pct, pred)
+' Uses canonical Schedule column constants from DEE_Config
+' ---------------------------------------------------------------------------
+Private Function BuildCurrentMap(ws As Worksheet) As Object
+    Dim m As Object
+    Set m = CreateObject("Scripting.Dictionary")
+
+    Dim lastRow As Long
+    lastRow = DEE_Utils.LastRow(ws, DEE_Config.COL_WBS_ID)
+    Dim r As Long
+    For r = 2 To lastRow
+        Dim code As String
+        code = Trim(CStr(ws.Cells(r, DEE_Config.COL_WBS_ID).Value))
+        If code = "" Then GoTo NextRow
+
+        ' Skip WBS summary rows (col B empty)
+        Dim taskName As String
+        taskName = Trim(CStr(ws.Cells(r, DEE_Config.COL_TASK_NAME).Value))
+        If taskName = "" Then GoTo NextRow
+
+        m(code) = Array( _
+            taskName, _
+            ws.Cells(r, DEE_Config.COL_START).Value, _
+            ws.Cells(r, DEE_Config.COL_FINISH).Value, _
+            ws.Cells(r, DEE_Config.COL_DUR).Value, _
+            ws.Cells(r, DEE_Config.COL_PCT).Value, _
+            ws.Cells(r, DEE_Config.COL_PRED).Value)
+NextRow:
+    Next r
+
+    Set BuildCurrentMap = m
+End Function
+
+' ---------------------------------------------------------------------------
+' WriteVarianceHeader -- Write output sheet column headers
+' ---------------------------------------------------------------------------
+Private Sub WriteVarianceHeader(ws As Worksheet, baselineName As String)
+    With ws.Range("A1:N1")
+        .Merge
+        .Value = "Baseline Variance Report -- Baseline: " & baselineName & "  |  Data Date: " & Format(Date, "dd-MMM-yyyy")
+        .Font.Bold = True
+        .Font.Size = 12
+        .Interior.Color = RGB(0, 32, 96)
+        .Font.Color = RGB(255, 255, 255)
+        .RowHeight = 24
+    End With
+
+    Dim headers As Variant
+    headers = Array("Task Code", "Task Name", _
+                    "BL Start", "BL Finish", "BL Dur (d)", _
+                    "ACT Start", "ACT Finish", "ACT Dur (d)", _
+                    "Start Slip (d)", "Finish Slip (d)", "Dur Delta (d)", _
+                    "Status", "% Complete", "Notes")
+
+    Dim i As Integer
+    For i = 0 To UBound(headers)
+        ws.Cells(2, i + 1).Value = headers(i)
+    Next i
+
+    DEE_Utils.ApplyTableHeader ws, 2, 1, 14
+End Sub
+
+' ---------------------------------------------------------------------------
+' WriteVarianceRows -- Compare maps and write diff rows
+' ---------------------------------------------------------------------------
+Private Sub WriteVarianceRows(ws As Worksheet, blMap As Object, actMap As Object)
+    Dim outRow As Long
+    outRow = 3
+
+    ' 1. Activities in baseline
+    Dim blKey As Variant
+    For Each blKey In blMap.Keys
+        Dim code As String
+        code = CStr(blKey)
+
+        Dim blData As Variant
+        blData = blMap(code)
+
+        If actMap.Exists(code) Then
+            Dim actData As Variant
+            actData = actMap(code)
+            outRow = WriteCompareRow(ws, outRow, code, blData, actData)
+        Else
+            ' DELETED
+            outRow = WriteDeletedRow(ws, outRow, code, blData)
+        End If
+    Next blKey
+
+    ' 2. New activities (in current but not in baseline)
+    Dim actKey As Variant
+    For Each actKey In actMap.Keys
+        code = CStr(actKey)
+        If Not blMap.Exists(code) Then
+            Dim actD As Variant
+            actD = actMap(code)
+            outRow = WriteNewRow(ws, outRow, code, actD)
+        End If
+    Next actKey
+End Sub
+
+' ---------------------------------------------------------------------------
+' WriteCompareRow -- Write one compared activity row; returns next row number
+' ---------------------------------------------------------------------------
+Private Function WriteCompareRow(ws As Worksheet, r As Long, _
+                                  code As String, blData As Variant, actData As Variant) As Long
+    ' blData / actData: Array(name, start, finish, dur, pct, pred)
+    Dim blStart  As Date:   blStart  = CDate(IIf(blData(1) = 0 Or IsEmpty(blData(1)), 0, blData(1)))
+    Dim blFinish As Date:   blFinish = CDate(IIf(blData(2) = 0 Or IsEmpty(blData(2)), 0, blData(2)))
+    Dim blDur    As Double: blDur    = CDbl(IIf(IsNumeric(blData(3)), blData(3), 0))
+    Dim blPred   As String: blPred   = CStr(blData(5))
+
+    Dim actStart  As Date:   actStart  = CDate(IIf(actData(1) = 0 Or IsEmpty(actData(1)), 0, actData(1)))
+    Dim actFinish As Date:   actFinish = CDate(IIf(actData(2) = 0 Or IsEmpty(actData(2)), 0, actData(2)))
+    Dim actDur    As Double: actDur    = CDbl(IIf(IsNumeric(actData(3)), actData(3), 0))
+    Dim actPct    As Double: actPct    = CDbl(IIf(IsNumeric(actData(4)), actData(4), 0))
+    Dim actPred   As String: actPred   = CStr(actData(5))
+
+    Dim startSlip  As Long
+    Dim finishSlip As Long
+    Dim durDelta   As Double
+    Dim notes      As String
+
+    If blStart  <> 0 And actStart  <> 0 Then startSlip  = CLng(actStart  - blStart)
+    If blFinish <> 0 And actFinish <> 0 Then finishSlip = CLng(actFinish - blFinish)
+    durDelta = actDur - blDur
+
+    ' Determine status
+    Dim statusFlag As String
+    If blPred <> actPred And blPred <> "" And actPred <> "" Then
+        statusFlag = "LOGIC_CHANGED"
+        notes = "Pred: [" & blPred & "] -> [" & actPred & "]"
+    ElseIf finishSlip > 0 Then
+        statusFlag = "SLIPPED"
+    ElseIf finishSlip < 0 Then
+        statusFlag = "AHEAD"
+    Else
+        statusFlag = "ON_TRACK"
+    End If
+
+    ' Write cells
+    ws.Cells(r, 1).Value  = code
+    ws.Cells(r, 2).Value  = CStr(actData(0))
+    If blStart  <> 0 Then ws.Cells(r, 3).Value = blStart
+    If blFinish <> 0 Then ws.Cells(r, 4).Value = blFinish
+    ws.Cells(r, 5).Value  = blDur
+    If actStart  <> 0 Then ws.Cells(r, 6).Value = actStart
+    If actFinish <> 0 Then ws.Cells(r, 7).Value = actFinish
+    ws.Cells(r, 8).Value  = actDur
+    ws.Cells(r, 9).Value  = startSlip
+    ws.Cells(r, 10).Value = finishSlip
+    ws.Cells(r, 11).Value = durDelta
+    ws.Cells(r, 12).Value = statusFlag
+    ws.Cells(r, 13).Value = actPct / 100
+    ws.Cells(r, 14).Value = notes
+
+    ' Format date cells
+    ws.Cells(r, 3).NumberFormat = "dd-mmm-yy"
+    ws.Cells(r, 4).NumberFormat = "dd-mmm-yy"
+    ws.Cells(r, 6).NumberFormat = "dd-mmm-yy"
+    ws.Cells(r, 7).NumberFormat = "dd-mmm-yy"
+    ws.Cells(r, 13).NumberFormat = "0%"
+
+    ' Colour the status cell
+    Dim statusColor As Long
+    Select Case statusFlag
+        Case "ON_TRACK":      statusColor = COLOR_ON_TRACK
+        Case "SLIPPED":       statusColor = COLOR_SLIPPED
+        Case "AHEAD":         statusColor = COLOR_AHEAD
+        Case "LOGIC_CHANGED": statusColor = COLOR_LOGIC
+        Case Else:            statusColor = RGB(240, 240, 240)
+    End Select
+    ws.Cells(r, 12).Interior.Color = statusColor
+    If statusFlag <> "ON_TRACK" Then
+        ws.Cells(r, 12).Font.Bold = True
+        ws.Cells(r, 12).Font.Color = IIf(statusFlag = "SLIPPED", RGB(255, 255, 255), RGB(0, 0, 0))
+    End If
+
+    ' Highlight slip days
+    If finishSlip > 5 Then
+        ws.Cells(r, 10).Font.Color = RGB(200, 0, 0)
+        ws.Cells(r, 10).Font.Bold = True
+    ElseIf finishSlip > 0 Then
+        ws.Cells(r, 10).Font.Color = RGB(180, 100, 0)
+    ElseIf finishSlip < 0 Then
+        ws.Cells(r, 10).Font.Color = RGB(0, 130, 60)
+    End If
+
+    WriteCompareRow = r + 1
+End Function
+
+Private Function WriteDeletedRow(ws As Worksheet, r As Long, code As String, blData As Variant) As Long
+    ws.Cells(r, 1).Value = code
+    ws.Cells(r, 2).Value = CStr(blData(0))
+    If Not IsEmpty(blData(1)) And blData(1) <> 0 Then
+        ws.Cells(r, 3).Value = blData(1)
+        ws.Cells(r, 3).NumberFormat = "dd-mmm-yy"
+    End If
+    If Not IsEmpty(blData(2)) And blData(2) <> 0 Then
+        ws.Cells(r, 4).Value = blData(2)
+        ws.Cells(r, 4).NumberFormat = "dd-mmm-yy"
+    End If
+    ws.Cells(r, 5).Value  = blData(3)
+    ws.Cells(r, 12).Value = "DELETED"
+    ws.Cells(r, 12).Interior.Color = COLOR_DELETED
+    ws.Cells(r, 12).Font.Color = RGB(80, 80, 80)
+    ws.Range(ws.Cells(r, 1), ws.Cells(r, 11)).Interior.Color = RGB(230, 230, 230)
+    WriteDeletedRow = r + 1
+End Function
+
+Private Function WriteNewRow(ws As Worksheet, r As Long, code As String, actData As Variant) As Long
+    ws.Cells(r, 1).Value = code
+    ws.Cells(r, 2).Value = CStr(actData(0))
+    If Not IsEmpty(actData(1)) And actData(1) <> 0 Then
+        ws.Cells(r, 6).Value = actData(1)
+        ws.Cells(r, 6).NumberFormat = "dd-mmm-yy"
+    End If
+    If Not IsEmpty(actData(2)) And actData(2) <> 0 Then
+        ws.Cells(r, 7).Value = actData(2)
+        ws.Cells(r, 7).NumberFormat = "dd-mmm-yy"
+    End If
+    ws.Cells(r, 8).Value  = actData(3)
+    ws.Cells(r, 13).Value = CDbl(IIf(IsNumeric(actData(4)), actData(4), 0)) / 100
+    ws.Cells(r, 13).NumberFormat = "0%"
+    ws.Cells(r, 12).Value = "NEW"
+    ws.Cells(r, 12).Interior.Color = COLOR_NEW
+    ws.Cells(r, 12).Font.Bold = True
+    WriteNewRow = r + 1
+End Function
+
+' ---------------------------------------------------------------------------
+' ClearBaseline -- Delete a named baseline sheet and its CDP entry
 ' ---------------------------------------------------------------------------
 Public Sub ClearBaseline()
     Dim wb As Workbook
     Set wb = ActiveWorkbook
-    Application.DisplayAlerts = False
+
+    Dim names As Variant
+    names = ListBaselineNames(wb)
+
+    If IsEmpty(names) Then
+        MsgBox "No baselines found.", vbInformation, "Protocol DEE"
+        Exit Sub
+    End If
+
+    Dim listStr As String
+    Dim i As Integer
+    For i = 0 To UBound(names)
+        listStr = listStr & (i + 1) & ") " & names(i) & vbCrLf
+    Next i
+
+    Dim choice As String
+    choice = InputBox("Select baseline to clear:" & vbCrLf & vbCrLf & listStr, _
+                      "Clear Baseline", "1")
+    If choice = "" Then Exit Sub
+
+    Dim choiceNum As Integer
     On Error Resume Next
-    wb.Worksheets(BASELINE_SHEET).Delete
+    choiceNum = CInt(choice) - 1
     On Error GoTo 0
-    Application.DisplayAlerts = True
-    MsgBox "Baseline cleared.", vbInformation, "Protocol DEE"
+    If choiceNum < 0 Or choiceNum > UBound(names) Then Exit Sub
+
+    Dim name As String
+    name = CStr(names(choiceNum))
+
+    DeleteSheetIfExists wb, SH_PREFIX & name
+    RemoveBaselineCDP wb, name
+    DEE_Logger.LogInfo "DEE_BaselineCompare", "Baseline cleared: " & name
+    MsgBox "Baseline '" & name & "' cleared.", vbInformation, "Protocol DEE"
 End Sub
 
 ' ---------------------------------------------------------------------------
-' HasBaseline -- Returns True if a baseline is stored
+' Helpers: CDP storage, sheet deletion, name listing
 ' ---------------------------------------------------------------------------
-Public Function HasBaseline() As Boolean
+Private Sub StoreBaselineCDP(wb As Workbook, name As String, filePath As String)
+    Dim cdpName As String
+    cdpName = CDP_PREFIX & name
     On Error Resume Next
-    HasBaseline = Not (ActiveWorkbook.Worksheets(BASELINE_SHEET) Is Nothing)
+    wb.CustomDocumentProperties(cdpName).Delete
     On Error GoTo 0
+    On Error Resume Next
+    wb.CustomDocumentProperties.Add cdpName, False, msoPropertyTypeString, filePath
+    On Error GoTo 0
+End Sub
+
+Private Sub RemoveBaselineCDP(wb As Workbook, name As String)
+    On Error Resume Next
+    wb.CustomDocumentProperties(CDP_PREFIX & name).Delete
+    On Error GoTo 0
+End Sub
+
+Private Sub DeleteSheetIfExists(wb As Workbook, sheetName As String)
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = wb.Worksheets(sheetName)
+    On Error GoTo 0
+    If Not ws Is Nothing Then
+        Application.DisplayAlerts = False
+        ws.Delete
+        Application.DisplayAlerts = True
+    End If
+End Sub
+
+Private Function ListBaselineNames(wb As Workbook) As Variant
+    Dim names() As String
+    Dim count As Integer
+    count = 0
+
+    Dim ws As Worksheet
+    For Each ws In wb.Worksheets
+        If Left(ws.Name, Len(SH_PREFIX)) = SH_PREFIX Then
+            ReDim Preserve names(count)
+            names(count) = Mid(ws.Name, Len(SH_PREFIX) + 1)
+            count = count + 1
+        End If
+    Next ws
+
+    If count = 0 Then
+        ListBaselineNames = Empty
+    Else
+        ListBaselineNames = names
+    End If
 End Function

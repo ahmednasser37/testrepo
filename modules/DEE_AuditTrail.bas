@@ -2,437 +2,440 @@ Attribute VB_Name = "DEE_AuditTrail"
 Option Explicit
 
 ' =============================================================================
-' DEE_AuditTrail.bas -- Change Audit Trail (Section 15.13)
+' DEE_AuditTrail.bas -- Diff-on-Demand Audit Trail (P1 rewrite)
 ' Protocol DEE v2 -- Project Controls Add-in
 ' =============================================================================
-' Two-mode audit system:
+' Compares any two snapshot sheets (Snap_yyyy-mm-dd or _DEE_Version_NNN) and
+' writes a structured change log to "_DEE_Audit" hidden sheet.
 '
-' MODE 1 -- EVENT-DRIVEN (manual cell edits to PMS input columns):
-'   Worksheet_Change fires on L, N, O, R, T, U edits.
-'   Logs: Timestamp | User | Cell | Old Value | New Value | Data Date
-'   Storage: hidden sheet "_DEE_AuditLog"
+' IMPACT LEVELS:
+'   HIGH   -- Finish date change > 5 days, activity added/deleted, logic change
+'   MEDIUM -- Finish date change 1-5 days, % complete change > 10%, budget delta > 10%
+'   LOW    -- Start date change, duration change, resource change, notes edit
 '
-' MODE 2 -- DIFF-ON-DEMAND (XER re-import or snapshot compare):
-'   CompareSnapshots() diffs two Snap_yyyy-mm-dd sheets and reports
-'   added/removed/changed activities as a formal change log.
-'   Better for bulk operations where Worksheet_Change is unreliable.
-'
-' LOG SHEET: "_DEE_AuditLog"
-'   A=Timestamp  B=User  C=Sheet  D=Cell  E=OldValue  F=NewValue
-'   G=DataDate   H=ChangeType
+' AUDIT SHEET "_DEE_Audit" columns:
+'   A  Timestamp  B  User  C  Impact  D  ChangeType  E  TaskCode  F  Field
+'   G  FromValue  H  ToValue  I  Delta  J  FromSheet  K  ToSheet
 ' =============================================================================
 
-Private Const AUDIT_SHEET As String = "_DEE_AuditLog"
-
-' PMS input columns that trigger event-driven logging (L,N,O,R,T,U = 12,14,15,18,20,21)
-Private Const INPUT_COLS As String = "12,14,15,18,20,21"
+Private Const AUDIT_SHEET As String = "_DEE_Audit"
 
 ' ---------------------------------------------------------------------------
-' IsInputColumn -- Returns True if column should be audited
-' ---------------------------------------------------------------------------
-Public Function IsInputColumn(col As Integer) As Boolean
-    Dim cols() As String
-    cols = Split(INPUT_COLS, ",")
-    Dim c As Integer
-    For Each c In cols
-        If CInt(c) = col Then
-            IsInputColumn = True
-            Exit Function
-        End If
-    Next c
-    IsInputColumn = False
-End Function
-
-' ---------------------------------------------------------------------------
-' LogChange -- Record a manual cell change (called from Worksheet_Change)
-' ---------------------------------------------------------------------------
-Public Sub LogChange(target As Range, oldValue As Variant)
-    On Error Resume Next  ' Never crash the user's edit
-
-    Dim wb As Workbook
-    Set wb = target.Parent.Parent
-
-    Dim wsLog As Worksheet
-    Set wsLog = GetOrCreateAuditSheet(wb)
-    If wsLog Is Nothing Then Exit Sub
-
-    Dim nextRow As Long
-    nextRow = wsLog.Cells(wsLog.Rows.Count, 1).End(xlUp).Row + 1
-
-    Dim dataDate As Date
-    dataDate = DEE_Utils.GetDataDate()
-
-    wsLog.Cells(nextRow, 1).Value = Now()
-    wsLog.Cells(nextRow, 1).NumberFormat = "yyyy-mm-dd HH:MM:SS"
-    wsLog.Cells(nextRow, 2).Value = Environ("USERNAME")
-    wsLog.Cells(nextRow, 3).Value = target.Parent.Name
-    wsLog.Cells(nextRow, 4).Value = target.Address(False, False)
-    wsLog.Cells(nextRow, 5).Value = oldValue
-    wsLog.Cells(nextRow, 6).Value = target.Value
-    wsLog.Cells(nextRow, 7).Value = dataDate
-    wsLog.Cells(nextRow, 7).NumberFormat = "yyyy-mm-dd"
-    wsLog.Cells(nextRow, 8).Value = "EDIT"
-
-    ' Color-code change type
-    wsLog.Cells(nextRow, 8).Interior.Color = RGB(255, 192, 0)
-
-    On Error GoTo 0
-End Sub
-
-' ---------------------------------------------------------------------------
-' CompareSnapshots -- Diff-on-demand between two Snap_ sheets
+' CompareSnapshots -- Diff two sheets chosen by user; write to _DEE_Audit
 ' ---------------------------------------------------------------------------
 Public Sub CompareSnapshots()
     Dim wb As Workbook
     Set wb = ActiveWorkbook
 
-    ' Collect all snapshot sheets
-    Dim snapNames() As String
-    Dim snapCount As Integer
-    snapCount = 0
-    ReDim snapNames(0 To wb.Worksheets.Count)
+    ' Collect candidate sheet names
+    Dim candidates() As String
+    Dim count As Integer
+    count = 0
 
     Dim ws As Worksheet
     For Each ws In wb.Worksheets
-        If Left(ws.Name, 5) = "Snap_" Then
-            snapNames(snapCount) = ws.Name
-            snapCount = snapCount + 1
+        Dim n As String
+        n = ws.Name
+        If Left(n, 5) = "Snap_" Or Left(n, Len("_DEE_Version_")) = "_DEE_Version_" Or _
+           n = DEE_Config.SHEET_SCHEDULE Then
+            ReDim Preserve candidates(count)
+            candidates(count) = n
+            count = count + 1
         End If
     Next ws
 
-    If snapCount < 2 Then
-        MsgBox "Need at least 2 snapshots to compare. Take more snapshots first.", _
+    If count < 2 Then
+        MsgBox "Need at least 2 snapshot sheets to compare." & vbCrLf & _
+               "Use 'Snapshot' or 'Save Version' to create snapshots.", _
                vbExclamation, "Protocol DEE"
         Exit Sub
     End If
 
     ' Build selection list
     Dim listStr As String
-    listStr = "Available snapshots:" & vbCrLf & vbCrLf
-    Dim s As Integer
-    For s = 0 To snapCount - 1
-        listStr = listStr & (s + 1) & ") " & snapNames(s) & vbCrLf
-    Next s
+    Dim i As Integer
+    For i = 0 To count - 1
+        listStr = listStr & (i + 1) & ") " & candidates(i) & vbCrLf
+    Next i
 
     Dim fromChoice As String
-    fromChoice = InputBox(listStr & vbCrLf & "Enter number for FROM (older) snapshot:", _
-                          "Compare Snapshots", "1")
+    fromChoice = InputBox("Select FROM (baseline) sheet number:" & vbCrLf & vbCrLf & listStr, _
+                          "Compare Snapshots -- FROM", "1")
     If fromChoice = "" Then Exit Sub
 
     Dim toChoice As String
-    toChoice = InputBox(listStr & vbCrLf & "Enter number for TO (newer) snapshot:", _
-                        "Compare Snapshots", CStr(snapCount))
+    toChoice = InputBox("Select TO (current) sheet number:" & vbCrLf & vbCrLf & listStr, _
+                        "Compare Snapshots -- TO", CStr(count))
     If toChoice = "" Then Exit Sub
 
     Dim fromIdx As Integer
     Dim toIdx As Integer
     On Error Resume Next
     fromIdx = CInt(fromChoice) - 1
-    toIdx = CInt(toChoice) - 1
+    toIdx   = CInt(toChoice)   - 1
     On Error GoTo 0
 
-    If fromIdx < 0 Or fromIdx >= snapCount Or toIdx < 0 Or toIdx >= snapCount Then
+    If fromIdx < 0 Or fromIdx >= count Or toIdx < 0 Or toIdx >= count Then
         MsgBox "Invalid selection.", vbExclamation, "Protocol DEE"
         Exit Sub
     End If
 
-    Dim wsFrom As Worksheet
-    Dim wsTo As Worksheet
-    Set wsFrom = wb.Worksheets(snapNames(fromIdx))
-    Set wsTo = wb.Worksheets(snapNames(toIdx))
+    Dim fromSheet As Worksheet
+    Dim toSheet As Worksheet
+    Set fromSheet = wb.Worksheets(candidates(fromIdx))
+    Set toSheet   = wb.Worksheets(candidates(toIdx))
 
+    DEE_Logger.LogInfo "DEE_AuditTrail", "CompareSnapshots: " & fromSheet.Name & " -> " & toSheet.Name
     DEE_Utils.StartProgress "Comparing snapshots"
 
-    ' Run diff
-    Dim wsDiff As Worksheet
-    Set wsDiff = RunSnapshotDiff(wb, wsFrom, wsTo)
+    Dim auditWs As Worksheet
+    Set auditWs = GetAuditSheet(wb)
 
+    RunDiff fromSheet, toSheet, auditWs
+
+    auditWs.Visible = xlSheetVisible
+    auditWs.Activate
     DEE_Utils.EndProgress
-    wsDiff.Activate
-    MsgBox "Snapshot comparison complete!", vbInformation, "Protocol DEE"
+    MsgBox "Snapshot comparison complete. See '" & AUDIT_SHEET & "' sheet.", _
+           vbInformation, "Protocol DEE"
 End Sub
 
 ' ---------------------------------------------------------------------------
-' RunSnapshotDiff -- Core diff engine between two snapshot sheets
+' RunDiff -- Core field-level diff engine
 ' ---------------------------------------------------------------------------
-Private Function RunSnapshotDiff(wb As Workbook, wsFrom As Worksheet, wsTo As Worksheet) As Worksheet
-    ' Build maps: task_code -> [start, finish, budget, AC%]
+Private Sub RunDiff(fromWs As Worksheet, toWs As Worksheet, auditWs As Worksheet)
+    ' Build maps from both sheets: task_code -> row data array
     Dim fromMap As Object
+    Set fromMap = BuildScheduleMap(fromWs)
     Dim toMap As Object
-    Set fromMap = BuildSnapshotMap(wsFrom)
-    Set toMap = BuildSnapshotMap(wsTo)
+    Set toMap = BuildScheduleMap(toWs)
 
-    ' Output sheet
-    Dim wsDiff As Worksheet
-    Dim diffName As String
-    diffName = "ChangeLog_" & Format(Now(), "yyyymmdd_HHmm")
-    Set wsDiff = DEE_Utils.GetOrCreateSheet(wb, diffName)
-    wsDiff.Cells.Clear
-
-    ' Title
-    With wsDiff.Range("A1:I1")
-        .Merge
-        .Value = "Change Log: " & wsFrom.Name & "  →  " & wsTo.Name
-        .Interior.Color = RGB(0, 32, 96)
-        .Font.Color = RGB(255, 255, 255)
-        .Font.Bold = True
-        .Font.Size = 12
-    End With
-
-    ' Headers
-    Dim hdrs As Variant
-    hdrs = Array("Activity ID", "Change Type", "Field", _
-                 "Old Value", "New Value", "Delta", _
-                 "From Snapshot", "To Snapshot", "Severity")
-    Dim h As Integer
-    For h = 0 To UBound(hdrs)
-        wsDiff.Cells(2, h + 1).Value = hdrs(h)
-    Next h
-    DEE_Utils.ApplyTableHeader wsDiff, 2, 1, UBound(hdrs) + 1
-
+    ' Find the audit sheet's next write row
     Dim outRow As Long
-    outRow = 3
+    outRow = DEE_Utils.LastRow(auditWs, 1)
+    If outRow < 2 Then
+        WriteAuditHeader auditWs
+        outRow = 2
+    Else
+        outRow = outRow + 1
+    End If
 
-    ' Check all TO keys (new + changed)
-    Dim k As Variant
-    For Each k In toMap.Keys
-        Dim tCode As String
-        tCode = CStr(k)
-        Dim toData As Variant
-        toData = toMap(tCode)
+    Dim ts As String
+    ts = Format(Now, "yyyy-mm-dd hh:mm:ss")
+    Dim userName As String
+    On Error Resume Next
+    userName = Environ("USERNAME")
+    On Error GoTo 0
+    If userName = "" Then userName = "Unknown"
 
-        If Not fromMap.Exists(tCode) Then
-            ' New activity
-            outRow = WriteChangeRow(wsDiff, outRow, tCode, "ADDED", "Activity", _
-                                    "", tCode, "", wsFrom.Name, wsTo.Name, "INFO")
+    ' Activities in FROM
+    Dim fromKey As Variant
+    For Each fromKey In fromMap.Keys
+        Dim code As String
+        code = CStr(fromKey)
+
+        Dim fromData As Variant
+        fromData = fromMap(code)
+
+        If toMap.Exists(code) Then
+            Dim toData As Variant
+            toData = toMap(code)
+            outRow = DiffActivity(auditWs, outRow, ts, userName, code, fromData, toData, fromWs.Name, toWs.Name)
         Else
-            ' Changed -- compare fields
-            Dim fromData As Variant
-            fromData = fromMap(tCode)
-
-            ' Start date change
-            If CStr(fromData(0)) <> CStr(toData(0)) Then
-                Dim startDelta As Long
-                startDelta = 0
-                If IsDate(fromData(0)) And IsDate(toData(0)) Then
-                    startDelta = CDate(toData(0)) - CDate(fromData(0))
-                End If
-                Dim startSev As String
-                startSev = IIf(Abs(startDelta) > 5, "HIGH", IIf(Abs(startDelta) > 0, "MEDIUM", "LOW"))
-                outRow = WriteChangeRow(wsDiff, outRow, tCode, "CHANGED", "Start Date", _
-                                        CStr(fromData(0)), CStr(toData(0)), _
-                                        IIf(startDelta >= 0, "+" & startDelta, CStr(startDelta)) & " days", _
-                                        wsFrom.Name, wsTo.Name, startSev)
-            End If
-
-            ' Finish date change
-            If CStr(fromData(1)) <> CStr(toData(1)) Then
-                Dim finDelta As Long
-                finDelta = 0
-                If IsDate(fromData(1)) And IsDate(toData(1)) Then
-                    finDelta = CDate(toData(1)) - CDate(fromData(1))
-                End If
-                Dim finSev As String
-                finSev = IIf(Abs(finDelta) > 5, "HIGH", IIf(Abs(finDelta) > 0, "MEDIUM", "LOW"))
-                outRow = WriteChangeRow(wsDiff, outRow, tCode, "CHANGED", "Finish Date", _
-                                        CStr(fromData(1)), CStr(toData(1)), _
-                                        IIf(finDelta >= 0, "+" & finDelta, CStr(finDelta)) & " days", _
-                                        wsFrom.Name, wsTo.Name, finSev)
-            End If
-
-            ' Budget change
-            Dim fromBudget As Double
-            Dim toBudget As Double
-            On Error Resume Next
-            fromBudget = CDbl(fromData(2))
-            toBudget = CDbl(toData(2))
-            On Error GoTo 0
-            If Abs(fromBudget - toBudget) > 0.01 Then
-                Dim budgDelta As Double
-                budgDelta = toBudget - fromBudget
-                outRow = WriteChangeRow(wsDiff, outRow, tCode, "CHANGED", "Budget", _
-                                        Format(fromBudget, "$#,##0.00"), _
-                                        Format(toBudget, "$#,##0.00"), _
-                                        Format(budgDelta, "+$#,##0.00;-$#,##0.00"), _
-                                        wsFrom.Name, wsTo.Name, _
-                                        IIf(Abs(budgDelta / IIf(fromBudget <> 0, fromBudget, 1)) > 0.1, "HIGH", "MEDIUM"))
-            End If
-
-            ' AC% change (column T = index 3 in map)
-            Dim fromAC As Double
-            Dim toAC As Double
-            On Error Resume Next
-            fromAC = CDbl(fromData(3))
-            toAC = CDbl(toData(3))
-            On Error GoTo 0
-            If Abs(fromAC - toAC) > 0.001 Then
-                outRow = WriteChangeRow(wsDiff, outRow, tCode, "CHANGED", "AC% Cum", _
-                                        Format(fromAC, "0.0%"), Format(toAC, "0.0%"), _
-                                        Format(toAC - fromAC, "+0.0%;-0.0%"), _
-                                        wsFrom.Name, wsTo.Name, "INFO")
-            End If
+            ' DELETED
+            outRow = WriteAuditRow(auditWs, outRow, ts, userName, "HIGH", "DELETED", code, _
+                                   "task_code", code, "", 0, fromWs.Name, toWs.Name)
         End If
-    Next k
+    Next fromKey
 
-    ' Check for removed activities
-    For Each k In fromMap.Keys
-        tCode = CStr(k)
-        If Not toMap.Exists(tCode) Then
-            outRow = WriteChangeRow(wsDiff, outRow, tCode, "REMOVED", "Activity", _
-                                    tCode, "", "", wsFrom.Name, wsTo.Name, "HIGH")
+    ' Activities in TO but not FROM = NEW
+    Dim toKey As Variant
+    For Each toKey In toMap.Keys
+        code = CStr(toKey)
+        If Not fromMap.Exists(code) Then
+            outRow = WriteAuditRow(auditWs, outRow, ts, userName, "HIGH", "ADDED", code, _
+                                   "task_code", "", code, 0, fromWs.Name, toWs.Name)
         End If
-    Next k
+    Next toKey
+End Sub
 
-    wsDiff.Columns("A:I").AutoFit
+' ---------------------------------------------------------------------------
+' DiffActivity -- Compare field by field; write a row for each changed field
+' Returns next available output row
+' ---------------------------------------------------------------------------
+Private Function DiffActivity(auditWs As Worksheet, startRow As Long, _
+                               ts As String, userName As String, code As String, _
+                               fromData As Variant, toData As Variant, _
+                               fromShName As String, toShName As String) As Long
+    ' fromData / toData: Array(name, start, finish, dur, pct, budget, pred)
+    Dim r As Long
+    r = startRow
 
-    ' Log this comparison to audit log
-    LogDiffRun wb, wsFrom.Name, wsTo.Name, outRow - 3
+    ' Field index constants (matches BuildScheduleMap order)
+    Const FLD_NAME   As Integer = 0
+    Const FLD_START  As Integer = 1
+    Const FLD_FINISH As Integer = 2
+    Const FLD_DUR    As Integer = 3
+    Const FLD_PCT    As Integer = 4
+    Const FLD_BUDGET As Integer = 5
+    Const FLD_PRED   As Integer = 6
 
-    Set RunSnapshotDiff = wsDiff
+    ' Finish date
+    Dim blFinish As Date
+    Dim actFinish As Date
+    On Error Resume Next
+    If fromData(FLD_FINISH) <> 0 And Not IsEmpty(fromData(FLD_FINISH)) Then blFinish = CDate(fromData(FLD_FINISH))
+    If toData(FLD_FINISH) <> 0 And Not IsEmpty(toData(FLD_FINISH)) Then actFinish = CDate(toData(FLD_FINISH))
+    On Error GoTo 0
+
+    If blFinish <> actFinish And (blFinish <> 0 Or actFinish <> 0) Then
+        Dim finSlip As Long
+        If blFinish <> 0 And actFinish <> 0 Then finSlip = CLng(actFinish - blFinish)
+        Dim impact As String
+        impact = IIf(Abs(finSlip) > 5, "HIGH", "MEDIUM")
+        r = WriteAuditRow(auditWs, r, ts, userName, impact, "DATE_CHANGE", code, "target_end_date", _
+                          Format(blFinish, "dd-mmm-yy"), Format(actFinish, "dd-mmm-yy"), finSlip, _
+                          fromShName, toShName)
+    End If
+
+    ' Start date
+    Dim blStart As Date
+    Dim actStart As Date
+    On Error Resume Next
+    If fromData(FLD_START) <> 0 And Not IsEmpty(fromData(FLD_START)) Then blStart = CDate(fromData(FLD_START))
+    If toData(FLD_START) <> 0 And Not IsEmpty(toData(FLD_START)) Then actStart = CDate(toData(FLD_START))
+    On Error GoTo 0
+
+    If blStart <> actStart And (blStart <> 0 Or actStart <> 0) Then
+        Dim startSlip As Long
+        If blStart <> 0 And actStart <> 0 Then startSlip = CLng(actStart - blStart)
+        r = WriteAuditRow(auditWs, r, ts, userName, "LOW", "DATE_CHANGE", code, "target_start_date", _
+                          Format(blStart, "dd-mmm-yy"), Format(actStart, "dd-mmm-yy"), startSlip, _
+                          fromShName, toShName)
+    End If
+
+    ' % complete
+    Dim blPct As Double
+    Dim actPct As Double
+    On Error Resume Next
+    blPct  = CDbl(fromData(FLD_PCT))
+    actPct = CDbl(toData(FLD_PCT))
+    On Error GoTo 0
+    If Abs(blPct - actPct) > 0.001 Then
+        Dim pctImpact As String
+        pctImpact = IIf(Abs(actPct - blPct) > 0.1, "MEDIUM", "LOW")
+        r = WriteAuditRow(auditWs, r, ts, userName, pctImpact, "PCT_CHANGE", code, "phys_complete_pct", _
+                          Format(blPct, "0.0%"), Format(actPct, "0.0%"), actPct - blPct, _
+                          fromShName, toShName)
+    End If
+
+    ' Budget
+    Dim blBudget As Double
+    Dim actBudget As Double
+    On Error Resume Next
+    blBudget  = CDbl(fromData(FLD_BUDGET))
+    actBudget = CDbl(toData(FLD_BUDGET))
+    On Error GoTo 0
+    If Abs(blBudget - actBudget) > 0.01 Then
+        Dim budgetDelta As Double
+        budgetDelta = actBudget - blBudget
+        Dim budgetPct As Double
+        If blBudget <> 0 Then budgetPct = budgetDelta / Abs(blBudget) Else budgetPct = 1
+        Dim budgetImpact As String
+        budgetImpact = IIf(Abs(budgetPct) > 0.1, "MEDIUM", "LOW")
+        r = WriteAuditRow(auditWs, r, ts, userName, budgetImpact, "BUDGET_CHANGE", code, "budget_qty", _
+                          Format(blBudget, "#,##0.00"), Format(actBudget, "#,##0.00"), budgetDelta, _
+                          fromShName, toShName)
+    End If
+
+    ' Predecessor logic
+    Dim blPred As String:  blPred  = Trim(CStr(fromData(FLD_PRED)))
+    Dim actPred As String: actPred = Trim(CStr(toData(FLD_PRED)))
+    If blPred <> actPred And (blPred <> "" Or actPred <> "") Then
+        r = WriteAuditRow(auditWs, r, ts, userName, "HIGH", "LOGIC_CHANGE", code, "predecessors", _
+                          blPred, actPred, 0, fromShName, toShName)
+    End If
+
+    DiffActivity = r
 End Function
 
 ' ---------------------------------------------------------------------------
-' BuildSnapshotMap -- Extract activity data from a snapshot sheet
-' Returns: task_code -> Array(Start, Finish, Budget, AC%)
+' BuildScheduleMap -- task_code -> Array(name, start, finish, dur, pct, budget, pred)
+' Skips WBS summary rows (col B empty)
 ' ---------------------------------------------------------------------------
-Private Function BuildSnapshotMap(ws As Worksheet) As Object
+Private Function BuildScheduleMap(ws As Worksheet) As Object
     Dim m As Object
     Set m = CreateObject("Scripting.Dictionary")
 
     Dim lastRow As Long
-    lastRow = DEE_Utils.LastRow(ws, 1)
-
-    ' Skip metadata row if present (hidden row 1 in snapshots)
-    Dim startRow As Long
-    startRow = 2
-    If ws.Rows(1).Hidden Then startRow = 3
-
-    Dim i As Long
-    For i = startRow To lastRow
-        ' Skip WBS rows (col B empty)
-        If Len(Trim(ws.Cells(i, 2).Value)) = 0 Then GoTo NextSnapRow
-
-        Dim tCode As String
-        tCode = Trim(ws.Cells(i, 1).Value)
-        If tCode = "" Then GoTo NextSnapRow
-
-        Dim acPct As Double
-        On Error Resume Next
-        acPct = CDbl(ws.Cells(i, 20).Value)  ' Column T: AC% Cum
-        On Error GoTo 0
-
-        m(tCode) = Array(ws.Cells(i, 3).Value, _  ' Start
-                         ws.Cells(i, 4).Value, _  ' Finish
-                         ws.Cells(i, 6).Value, _  ' Budget (F)
-                         acPct)                    ' AC%
-NextSnapRow:
-    Next i
-
-    Set BuildSnapshotMap = m
-End Function
-
-' ---------------------------------------------------------------------------
-' WriteChangeRow -- Write one change record to the diff sheet
-' Returns next available row number
-' ---------------------------------------------------------------------------
-Private Function WriteChangeRow(ws As Worksheet, rowNum As Long, _
-    actCode As String, changeType As String, fieldName As String, _
-    oldVal As String, newVal As String, delta As String, _
-    fromSnap As String, toSnap As String, severity As String) As Long
-
-    ws.Cells(rowNum, 1).Value = actCode
-    ws.Cells(rowNum, 2).Value = changeType
-    ws.Cells(rowNum, 3).Value = fieldName
-    ws.Cells(rowNum, 4).Value = oldVal
-    ws.Cells(rowNum, 5).Value = newVal
-    ws.Cells(rowNum, 6).Value = delta
-    ws.Cells(rowNum, 7).Value = fromSnap
-    ws.Cells(rowNum, 8).Value = toSnap
-    ws.Cells(rowNum, 9).Value = severity
-
-    ' Color severity column
-    Dim sevColor As Long
-    Select Case UCase(severity)
-        Case "HIGH":   sevColor = RGB(255, 0, 0)
-        Case "MEDIUM": sevColor = RGB(255, 192, 0)
-        Case "INFO":   sevColor = RGB(0, 112, 192)
-        Case Else:     sevColor = RGB(200, 200, 200)
-    End Select
-    ws.Cells(rowNum, 9).Interior.Color = sevColor
-    ws.Cells(rowNum, 9).Font.Color = RGB(255, 255, 255)
-    ws.Cells(rowNum, 9).Font.Bold = True
-
-    ' Alternate row shading
-    If rowNum Mod 2 = 0 Then
-        ws.Range(ws.Cells(rowNum, 1), ws.Cells(rowNum, 8)).Interior.Color = RGB(245, 245, 245)
+    lastRow = DEE_Utils.LastRow(ws, DEE_Config.COL_WBS_ID)
+    If lastRow < 2 Then
+        Set BuildScheduleMap = m
+        Exit Function
     End If
 
-    WriteChangeRow = rowNum + 1
+    Dim r As Long
+    For r = 2 To lastRow
+        Dim code As String
+        code = Trim(CStr(ws.Cells(r, DEE_Config.COL_WBS_ID).Value))
+        If code = "" Then GoTo NextRow
+
+        Dim taskName As String
+        taskName = Trim(CStr(ws.Cells(r, DEE_Config.COL_TASK_NAME).Value))
+        If taskName = "" Then GoTo NextRow  ' WBS summary row
+
+        m(code) = Array( _
+            taskName, _
+            ws.Cells(r, DEE_Config.COL_START).Value, _
+            ws.Cells(r, DEE_Config.COL_FINISH).Value, _
+            ws.Cells(r, DEE_Config.COL_DUR).Value, _
+            ws.Cells(r, DEE_Config.COL_PCT).Value, _
+            ws.Cells(r, DEE_Config.COL_BUDGET).Value, _
+            ws.Cells(r, DEE_Config.COL_PRED).Value)
+NextRow:
+    Next r
+
+    Set BuildScheduleMap = m
 End Function
 
 ' ---------------------------------------------------------------------------
-' LogDiffRun -- Record a diff operation in the audit log
+' WriteAuditRow -- Append one row to the audit sheet; return next row number
 ' ---------------------------------------------------------------------------
-Private Sub LogDiffRun(wb As Workbook, fromSnap As String, toSnap As String, changeCount As Long)
-    On Error Resume Next
-    Dim wsLog As Worksheet
-    Set wsLog = GetOrCreateAuditSheet(wb)
-    If wsLog Is Nothing Then Exit Sub
+Private Function WriteAuditRow(ws As Worksheet, r As Long, _
+                                ts As String, userName As String, _
+                                impact As String, changeType As String, _
+                                taskCode As String, fieldName As String, _
+                                fromVal As String, toVal As String, delta As Double, _
+                                fromShName As String, toShName As String) As Long
+    ws.Cells(r, 1).Value  = ts
+    ws.Cells(r, 2).Value  = userName
+    ws.Cells(r, 3).Value  = impact
+    ws.Cells(r, 4).Value  = changeType
+    ws.Cells(r, 5).Value  = taskCode
+    ws.Cells(r, 6).Value  = fieldName
+    ws.Cells(r, 7).Value  = fromVal
+    ws.Cells(r, 8).Value  = toVal
+    ws.Cells(r, 9).Value  = delta
+    ws.Cells(r, 10).Value = fromShName
+    ws.Cells(r, 11).Value = toShName
 
-    Dim nextRow As Long
-    nextRow = wsLog.Cells(wsLog.Rows.Count, 1).End(xlUp).Row + 1
+    ' Colour-code impact
+    Dim impactColor As Long
+    Select Case impact
+        Case "HIGH":   impactColor = RGB(255, 180, 180)
+        Case "MEDIUM": impactColor = RGB(255, 230, 130)
+        Case "LOW":    impactColor = RGB(210, 240, 210)
+        Case Else:     impactColor = RGB(240, 240, 240)
+    End Select
+    ws.Cells(r, 3).Interior.Color = impactColor
+    If impact = "HIGH" Then ws.Cells(r, 3).Font.Bold = True
 
-    wsLog.Cells(nextRow, 1).Value = Now()
-    wsLog.Cells(nextRow, 1).NumberFormat = "yyyy-mm-dd HH:MM:SS"
-    wsLog.Cells(nextRow, 2).Value = Environ("USERNAME")
-    wsLog.Cells(nextRow, 3).Value = "Diff"
-    wsLog.Cells(nextRow, 4).Value = fromSnap & " → " & toSnap
-    wsLog.Cells(nextRow, 5).Value = ""
-    wsLog.Cells(nextRow, 6).Value = changeCount & " changes found"
-    wsLog.Cells(nextRow, 7).Value = DEE_Utils.GetDataDate()
-    wsLog.Cells(nextRow, 7).NumberFormat = "yyyy-mm-dd"
-    wsLog.Cells(nextRow, 8).Value = "DIFF"
-    wsLog.Cells(nextRow, 8).Interior.Color = RGB(0, 112, 192)
-    wsLog.Cells(nextRow, 8).Font.Color = RGB(255, 255, 255)
-    On Error GoTo 0
+    WriteAuditRow = r + 1
+End Function
+
+' ---------------------------------------------------------------------------
+' WriteAuditHeader -- Write column headers on first use
+' ---------------------------------------------------------------------------
+Private Sub WriteAuditHeader(ws As Worksheet)
+    ws.Cells.Clear
+    ws.Range("A1:K1").Value = Array("Timestamp", "User", "Impact", "ChangeType", "TaskCode", "Field", _
+                                     "FromValue", "ToValue", "Delta", "FromSheet", "ToSheet")
+    ws.Range("A1:K1").Font.Bold = True
+    ws.Range("A1:K1").Interior.Color = RGB(0, 32, 96)
+    ws.Range("A1:K1").Font.Color = RGB(255, 255, 255)
+    ws.Columns("A").ColumnWidth = 20
+    ws.Columns("B:D").ColumnWidth = 14
+    ws.Columns("E:F").ColumnWidth = 16
+    ws.Columns("G:H").ColumnWidth = 20
+    ws.Columns("I").ColumnWidth = 10
+    ws.Columns("J:K").ColumnWidth = 20
 End Sub
 
 ' ---------------------------------------------------------------------------
-' ShowAuditLog -- Unhide and activate the audit log sheet
+' GetAuditSheet -- Return (creating if needed) the _DEE_Audit sheet
 ' ---------------------------------------------------------------------------
-Public Sub ShowAuditLog()
-    Dim wb As Workbook
-    Set wb = ActiveWorkbook
-    Dim wsLog As Worksheet
-    Set wsLog = GetOrCreateAuditSheet(wb)
-    wsLog.Visible = xlSheetVisible
-    wsLog.Activate
-    wsLog.Columns("A:H").AutoFit
-End Sub
-
-' ---------------------------------------------------------------------------
-' GetOrCreateAuditSheet -- Return hidden audit log sheet
-' ---------------------------------------------------------------------------
-Private Function GetOrCreateAuditSheet(wb As Workbook) As Worksheet
+Private Function GetAuditSheet(wb As Workbook) As Worksheet
     Dim ws As Worksheet
     On Error Resume Next
     Set ws = wb.Worksheets(AUDIT_SHEET)
     On Error GoTo 0
 
     If ws Is Nothing Then
-        Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+        Set ws = wb.Worksheets.Add
         ws.Name = AUDIT_SHEET
         ws.Visible = xlSheetVeryHidden
-        ws.Cells(1, 1).Value = "Timestamp"
-        ws.Cells(1, 2).Value = "User"
-        ws.Cells(1, 3).Value = "Sheet"
-        ws.Cells(1, 4).Value = "Cell / Context"
-        ws.Cells(1, 5).Value = "Old Value"
-        ws.Cells(1, 6).Value = "New Value"
-        ws.Cells(1, 7).Value = "Data Date"
-        ws.Cells(1, 8).Value = "Change Type"
-        DEE_Utils.ApplyTableHeader ws, 1, 1, 8
+        WriteAuditHeader ws
     End If
 
-    Set GetOrCreateAuditSheet = ws
+    Set GetAuditSheet = ws
 End Function
+
+' ---------------------------------------------------------------------------
+' ShowAuditLog -- Make the audit sheet visible and activate it
+' ---------------------------------------------------------------------------
+Public Sub ShowAuditLog()
+    Dim wb As Workbook
+    Set wb = ActiveWorkbook
+
+    Dim ws As Worksheet
+    Set ws = GetAuditSheet(wb)
+
+    Dim lastRow As Long
+    lastRow = DEE_Utils.LastRow(ws, 1)
+    If lastRow < 2 Then
+        MsgBox "Audit log is empty. Use 'Diff Snapshots' to generate entries.", _
+               vbInformation, "Protocol DEE"
+        Exit Sub
+    End If
+
+    ws.Visible = xlSheetVisible
+    ws.Activate
+
+    MsgBox lastRow - 1 & " audit entries recorded.", vbInformation, "Protocol DEE"
+End Sub
+
+' ---------------------------------------------------------------------------
+' ExportAuditCSV -- Export audit sheet to a CSV file
+' ---------------------------------------------------------------------------
+Public Sub ExportAuditCSV()
+    Dim wb As Workbook
+    Set wb = ActiveWorkbook
+
+    Dim ws As Worksheet
+    Set ws = GetAuditSheet(wb)
+
+    Dim lastRow As Long
+    lastRow = DEE_Utils.LastRow(ws, 1)
+    If lastRow < 2 Then
+        MsgBox "Audit log is empty.", vbInformation, "Protocol DEE"
+        Exit Sub
+    End If
+
+    Dim savePath As String
+    savePath = Application.GetSaveAsFilename( _
+        InitialFileName:="DEE_AuditTrail_" & Format(Now, "yyyymmdd") & ".csv", _
+        FileFilter:="CSV Files (*.csv),*.csv")
+    If savePath = "False" Or savePath = "" Then Exit Sub
+
+    Dim fNum As Integer
+    fNum = FreeFile
+    Open savePath For Output As #fNum
+    Print #fNum, "Timestamp,User,Impact,ChangeType,TaskCode,Field,FromValue,ToValue,Delta,FromSheet,ToSheet"
+
+    Dim r As Long
+    For r = 2 To lastRow
+        Dim line As String
+        Dim c As Integer
+        line = ""
+        For c = 1 To 11
+            Dim cellVal As String
+            cellVal = Replace(CStr(ws.Cells(r, c).Value), """", """""")
+            If c > 1 Then line = line & ","
+            line = line & """" & cellVal & """"
+        Next c
+        Print #fNum, line
+    Next r
+
+    Close #fNum
+    MsgBox "Audit log exported to:" & vbCrLf & savePath, vbInformation, "Protocol DEE"
+End Sub

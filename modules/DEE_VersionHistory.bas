@@ -2,295 +2,323 @@ Attribute VB_Name = "DEE_VersionHistory"
 Option Explicit
 
 ' =============================================================================
-' DEE_VersionHistory.bas -- Schedule Version History (Section 15.12)
+' DEE_VersionHistory.bas -- Version History (P1 rewrite)
 ' Protocol DEE v2 -- Project Controls Add-in
 ' =============================================================================
-' Stores up to 20 compressed Schedule snapshots in hidden sheet "_DEE_History".
-' Each save captures: timestamp, version number, data date, user, row count.
-' Snapshots are Base64-encoded CSV blobs (compact, no external dependency).
+' Each version snapshot is stored as a hidden sheet "_DEE_Version_NNN" (NNN
+' zero-padded to 3 digits). A registry sheet "_DEE_Versions" tracks metadata:
 '
-' STORAGE: Hidden sheet "_DEE_History"
-'   Col A = Version No    Col B = Timestamp    Col C = Data Date
-'   Col D = User          Col E = Row Count    Col F = Compressed Data (Base64 CSV)
+'   Col A: Version number (integer)
+'   Col B: Label (user-supplied or auto "v001")
+'   Col C: Timestamp (date/time)
+'   Col D: Sheet name
+'   Col E: Row count (activities)
+'   Col F: Hash fingerprint (MSXML2 Base64-based, first 32 chars)
 '
-' MAX VERSIONS: 20 (FIFO rotation -- oldest dropped when limit reached)
+' FIFO: when version count exceeds GetMaxVersions(), oldest sheet+row deleted.
 ' =============================================================================
 
-Private Const HISTORY_SHEET  As String = "_DEE_History"
-Private Const MAX_VERSIONS   As Integer = 20
+Private Const REG_SHEET  As String = "_DEE_Versions"
+Private Const VER_PREFIX As String = "_DEE_Version_"
+
+Private Const REG_COL_NUM   As Integer = 1
+Private Const REG_COL_LABEL As Integer = 2
+Private Const REG_COL_TIME  As Integer = 3
+Private Const REG_COL_SHEET As Integer = 4
+Private Const REG_COL_ROWS  As Integer = 5
+Private Const REG_COL_HASH  As Integer = 6
 
 ' ---------------------------------------------------------------------------
-' SaveVersion -- Capture current Schedule sheet as a new version
+' SaveVersion -- Snapshot current Schedule sheet into a hidden version sheet
 ' ---------------------------------------------------------------------------
 Public Sub SaveVersion()
     Dim wb As Workbook
     Set wb = ActiveWorkbook
 
-    Dim wsSch As Worksheet
+    Dim schedWs As Worksheet
     On Error Resume Next
-    Set wsSch = wb.Worksheets("Schedule")
+    Set schedWs = wb.Worksheets(DEE_Config.SHEET_SCHEDULE)
     On Error GoTo 0
-    If wsSch Is Nothing Then
-        MsgBox "Schedule sheet not found.", vbCritical, "Protocol DEE"
+
+    If schedWs Is Nothing Then
+        MsgBox "Schedule sheet not found.", vbExclamation, "Protocol DEE"
         Exit Sub
     End If
 
-    DEE_Utils.StartProgress "Saving Version"
+    Dim label As String
+    label = InputBox("Enter version label (leave blank for auto):", "Save Version", "")
+    If label = Chr(0) Then Exit Sub  ' user pressed Cancel
 
-    Dim wsHist As Worksheet
-    Set wsHist = GetOrCreateHistorySheet(wb)
+    DEE_Logger.LogInfo "DEE_VersionHistory", "SaveVersion started"
+    DEE_Utils.StartProgress "Saving version snapshot"
 
-    ' Get next version number
-    Dim versionNo As Integer
-    Dim lastHistRow As Long
-    lastHistRow = wsHist.Cells(wsHist.Rows.Count, 1).End(xlUp).Row
-    If lastHistRow < 2 Then
-        versionNo = 1
-    Else
-        versionNo = CInt(wsHist.Cells(lastHistRow, 1).Value) + 1
-    End If
+    Dim reg As Worksheet
+    Set reg = GetRegistrySheet(wb)
 
-    ' Enforce FIFO rotation (max 20 versions)
-    Do While (lastHistRow - 1) >= MAX_VERSIONS And lastHistRow >= 2
-        wsHist.Rows(2).Delete
-        lastHistRow = wsHist.Cells(wsHist.Rows.Count, 1).End(xlUp).Row
-    Loop
+    Dim nextNum As Integer
+    nextNum = NextVersionNumber(reg)
+    Dim numStr As String
+    numStr = Format(nextNum, "000")
 
-    ' Serialize Schedule sheet to CSV blob
-    DEE_Utils.UpdateProgress 30, "Serializing schedule data"
-    Dim csvBlob As String
-    csvBlob = SerializeSchedule(wsSch)
+    If Trim(label) = "" Then label = "v" & numStr
 
-    ' Encode to Base64
-    DEE_Utils.UpdateProgress 70, "Encoding snapshot"
-    Dim encoded As String
-    encoded = Base64Encode(csvBlob)
+    Dim sheetName As String
+    sheetName = VER_PREFIX & numStr
 
-    ' Get data date
-    Dim dataDate As Date
-    dataDate = DEE_Utils.GetDataDate()
+    ' Copy Schedule to new hidden sheet
+    schedWs.Copy After:=wb.Worksheets(wb.Worksheets.Count)
+    Dim newWs As Worksheet
+    Set newWs = wb.Worksheets(wb.Worksheets.Count)
+    newWs.Name = sheetName
+    newWs.Visible = xlSheetVeryHidden
 
-    ' Write version record
-    Dim newRow As Long
-    newRow = wsHist.Cells(wsHist.Rows.Count, 1).End(xlUp).Row + 1
+    Dim rowCount As Long
+    rowCount = DEE_Utils.LastRow(newWs, DEE_Config.COL_WBS_ID) - 1
+    If rowCount < 0 Then rowCount = 0
 
-    wsHist.Cells(newRow, 1).Value = versionNo
-    wsHist.Cells(newRow, 2).Value = Now()
-    wsHist.Cells(newRow, 2).NumberFormat = "yyyy-mm-dd HH:MM"
-    wsHist.Cells(newRow, 3).Value = dataDate
-    wsHist.Cells(newRow, 3).NumberFormat = "yyyy-mm-dd"
-    wsHist.Cells(newRow, 4).Value = Environ("USERNAME")
-    wsHist.Cells(newRow, 5).Value = DEE_Utils.LastRow(wsSch, 1) - 1
-    wsHist.Cells(newRow, 6).Value = encoded
+    Dim hashVal As String
+    hashVal = ComputeSheetHash(newWs, rowCount)
+
+    ' Append to registry
+    Dim lastRegRow As Long
+    lastRegRow = DEE_Utils.LastRow(reg, REG_COL_NUM)
+    If lastRegRow < 1 Then lastRegRow = 1
+    Dim regRow As Long
+    regRow = lastRegRow + 1
+
+    reg.Cells(regRow, REG_COL_NUM).Value   = nextNum
+    reg.Cells(regRow, REG_COL_LABEL).Value = label
+    reg.Cells(regRow, REG_COL_TIME).Value  = Now
+    reg.Cells(regRow, REG_COL_TIME).NumberFormat = "yyyy-mm-dd hh:mm:ss"
+    reg.Cells(regRow, REG_COL_SHEET).Value = sheetName
+    reg.Cells(regRow, REG_COL_ROWS).Value  = rowCount
+    reg.Cells(regRow, REG_COL_HASH).Value  = hashVal
+
+    PruneOldVersions wb, reg
 
     DEE_Utils.EndProgress
-    MsgBox "Version " & versionNo & " saved." & vbCrLf & _
-           Format(Now(), "yyyy-mm-dd HH:MM") & " | " & _
-           (DEE_Utils.LastRow(wsSch, 1) - 1) & " rows", _
-           vbInformation, "Protocol DEE -- Version Saved"
+    DEE_Logger.LogInfo "DEE_VersionHistory", "Saved version " & label & " (" & rowCount & " rows, hash=" & hashVal & ")"
+    MsgBox "Version '" & label & "' saved." & vbCrLf & "Activities: " & rowCount, _
+           vbInformation, "Protocol DEE"
 End Sub
 
 ' ---------------------------------------------------------------------------
-' ShowHistory -- Display version list and let user restore
+' ShowHistory -- Present version list and let user restore one
 ' ---------------------------------------------------------------------------
 Public Sub ShowHistory()
     Dim wb As Workbook
     Set wb = ActiveWorkbook
 
-    Dim wsHist As Worksheet
-    On Error Resume Next
-    Set wsHist = wb.Worksheets(HISTORY_SHEET)
-    On Error GoTo 0
-    If wsHist Is Nothing Then
-        MsgBox "No version history found. Save a version first.", vbExclamation, "Protocol DEE"
-        Exit Sub
-    End If
+    Dim reg As Worksheet
+    Set reg = GetRegistrySheet(wb)
 
     Dim lastRow As Long
-    lastRow = wsHist.Cells(wsHist.Rows.Count, 1).End(xlUp).Row
+    lastRow = DEE_Utils.LastRow(reg, REG_COL_NUM)
     If lastRow < 2 Then
-        MsgBox "No versions stored yet.", vbInformation, "Protocol DEE"
+        MsgBox "No version history found. Use 'Save Version' first.", vbInformation, "Protocol DEE"
         Exit Sub
     End If
 
-    ' Build version list string
     Dim listStr As String
-    listStr = "Stored Versions (newest first):" & vbCrLf & vbCrLf
+    listStr = "Saved Versions (newest last):" & vbCrLf & vbCrLf
+
+    Dim dispIdx As Integer
+    dispIdx = 1
+    Dim dispMap() As Long
+    ReDim dispMap(1 To lastRow - 1)
+
     Dim r As Long
-    For r = lastRow To 2 Step -1
-        listStr = listStr & _
-            "v" & wsHist.Cells(r, 1).Value & _
-            "  |  " & Format(wsHist.Cells(r, 2).Value, "yyyy-mm-dd HH:MM") & _
-            "  |  DD: " & Format(wsHist.Cells(r, 3).Value, "yyyy-mm-dd") & _
-            "  |  " & wsHist.Cells(r, 5).Value & " rows" & _
-            "  |  " & wsHist.Cells(r, 4).Value & vbCrLf
+    For r = 2 To lastRow
+        Dim vNum  As Long:   vNum  = CLng(reg.Cells(r, REG_COL_NUM).Value)
+        Dim vLbl  As String: vLbl  = CStr(reg.Cells(r, REG_COL_LABEL).Value)
+        Dim vTs   As String: vTs   = Format(reg.Cells(r, REG_COL_TIME).Value, "yyyy-mm-dd hh:mm")
+        Dim vRows As Long:   vRows = CLng(reg.Cells(r, REG_COL_ROWS).Value)
+        Dim vHash As String: vHash = Left(CStr(reg.Cells(r, REG_COL_HASH).Value), 8)
+        listStr = listStr & dispIdx & ")  " & vLbl & "  [" & vTs & "]  " & vRows & " rows  #" & vHash & vbCrLf
+        dispMap(dispIdx) = r
+        dispIdx = dispIdx + 1
     Next r
 
+    listStr = listStr & vbCrLf & "Enter number to RESTORE that version to Schedule (or Cancel):"
     Dim choice As String
-    choice = InputBox(listStr & vbCrLf & "Enter version number to restore (or Cancel to exit):", _
-                      "Version History -- Protocol DEE")
+    choice = InputBox(listStr, "Version History")
     If choice = "" Then Exit Sub
 
-    Dim targetVersion As Integer
+    Dim choiceNum As Integer
     On Error Resume Next
-    targetVersion = CInt(choice)
+    choiceNum = CInt(choice)
     On Error GoTo 0
-
-    ' Find the row for this version
-    Dim foundRow As Long
-    foundRow = 0
-    For r = 2 To lastRow
-        If CInt(wsHist.Cells(r, 1).Value) = targetVersion Then
-            foundRow = r
-            Exit For
-        End If
-    Next r
-
-    If foundRow = 0 Then
-        MsgBox "Version " & targetVersion & " not found.", vbExclamation, "Protocol DEE"
+    If choiceNum < 1 Or choiceNum > dispIdx - 1 Then
+        MsgBox "Invalid selection.", vbExclamation, "Protocol DEE"
         Exit Sub
     End If
 
-    ' Confirm restore
-    Dim resp As Integer
-    resp = MsgBox("Restore version " & targetVersion & "?" & vbCrLf & _
-                  "Saved: " & Format(wsHist.Cells(foundRow, 2).Value, "yyyy-mm-dd HH:MM") & vbCrLf & _
-                  "Data Date: " & Format(wsHist.Cells(foundRow, 3).Value, "yyyy-mm-dd") & vbCrLf & vbCrLf & _
-                  "WARNING: Current Schedule sheet will be overwritten!", _
-                  vbYesNo + vbExclamation, "Protocol DEE -- Restore Version")
-    If resp <> vbYes Then Exit Sub
+    Dim targetRow As Long
+    targetRow = dispMap(choiceNum)
+    Dim targetSheet As String:  targetSheet = CStr(reg.Cells(targetRow, REG_COL_SHEET).Value)
+    Dim targetLabel As String:  targetLabel = CStr(reg.Cells(targetRow, REG_COL_LABEL).Value)
 
-    DEE_Utils.StartProgress "Restoring version " & targetVersion
+    Dim confirm As Integer
+    confirm = MsgBox("Restore version '" & targetLabel & "'?" & vbCrLf & _
+                     "The current Schedule sheet will be overwritten.", _
+                     vbYesNo + vbQuestion, "Protocol DEE")
+    If confirm <> vbYes Then Exit Sub
 
-    ' Decode and restore
-    Dim encoded As String
-    encoded = CStr(wsHist.Cells(foundRow, 6).Value)
-    Dim csvBlob As String
-    csvBlob = Base64Decode(encoded)
+    RestoreVersion wb, targetSheet, targetLabel
+End Sub
 
-    DEE_Utils.UpdateProgress 50, "Writing Schedule sheet"
-    RestoreSchedule wb, csvBlob
+' ---------------------------------------------------------------------------
+' RestoreVersion -- Overwrite Schedule sheet with content from a version sheet
+' ---------------------------------------------------------------------------
+Private Sub RestoreVersion(wb As Workbook, sheetName As String, label As String)
+    Dim verWs As Worksheet
+    On Error Resume Next
+    Set verWs = wb.Worksheets(sheetName)
+    On Error GoTo 0
+
+    If verWs Is Nothing Then
+        MsgBox "Version sheet '" & sheetName & "' not found.", vbCritical, "Protocol DEE"
+        Exit Sub
+    End If
+
+    Dim schedWs As Worksheet
+    On Error Resume Next
+    Set schedWs = wb.Worksheets(DEE_Config.SHEET_SCHEDULE)
+    On Error GoTo 0
+
+    If schedWs Is Nothing Then
+        MsgBox "Schedule sheet not found.", vbCritical, "Protocol DEE"
+        Exit Sub
+    End If
+
+    DEE_Logger.LogInfo "DEE_VersionHistory", "RestoreVersion: " & label & " from " & sheetName
+    DEE_Utils.StartProgress "Restoring version: " & label
+
+    schedWs.Cells.Clear
+    verWs.UsedRange.Copy schedWs.Range("A1")
+    schedWs.Activate
 
     DEE_Utils.EndProgress
-    MsgBox "Version " & targetVersion & " restored successfully.", vbInformation, "Protocol DEE"
+    MsgBox "Version '" & label & "' restored to Schedule sheet.", vbInformation, "Protocol DEE"
 End Sub
 
 ' ---------------------------------------------------------------------------
-' SerializeSchedule -- Convert Schedule sheet to CSV string
+' GetRegistrySheet -- Return (creating if needed) the _DEE_Versions sheet
 ' ---------------------------------------------------------------------------
-Private Function SerializeSchedule(ws As Worksheet) As String
-    Dim lastRow As Long
-    Dim lastCol As Integer
-    lastRow = DEE_Utils.LastRow(ws, 1)
-    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
-    If lastCol < 6 Then lastCol = 6
-    ' Cap at column X (24) to keep blob manageable
-    If lastCol > 24 Then lastCol = 24
-
-    Dim sb As String
-    Dim i As Long
-    Dim c As Integer
-
-    For i = 1 To lastRow
-        Dim lineArr() As String
-        ReDim lineArr(0 To lastCol - 1)
-        For c = 1 To lastCol
-            Dim v As String
-            v = CStr(ws.Cells(i, c).Value)
-            ' Escape pipes (delimiter)
-            v = Replace(v, "|", "~PIPE~")
-            lineArr(c - 1) = v
-        Next c
-        sb = sb & Join(lineArr, "|") & vbLf
-    Next i
-
-    SerializeSchedule = sb
-End Function
-
-' ---------------------------------------------------------------------------
-' RestoreSchedule -- Rebuild Schedule sheet from CSV blob
-' ---------------------------------------------------------------------------
-Private Sub RestoreSchedule(wb As Workbook, csvBlob As String)
-    Dim ws As Worksheet
-    Set ws = DEE_Utils.GetOrCreateSheet(wb, "Schedule")
-    ws.Cells.Clear
-
-    Dim lines() As String
-    lines = Split(csvBlob, vbLf)
-
-    Dim i As Long
-    For i = 0 To UBound(lines)
-        If Len(Trim(lines(i))) = 0 Then GoTo NextRestoreLine
-        Dim cols() As String
-        cols = Split(lines(i), "|")
-        Dim c As Integer
-        For c = 0 To UBound(cols)
-            Dim v As String
-            v = Replace(cols(c), "~PIPE~", "|")
-            ws.Cells(i + 1, c + 1).Value = v
-        Next c
-NextRestoreLine:
-    Next i
-
-    ' Re-apply date formats and WBS colors
-    ws.Columns(3).NumberFormat = "yyyy-mm-dd"
-    ws.Columns(4).NumberFormat = "yyyy-mm-dd"
-    DEE_WBS.ApplyWBSColoring ws
-    DEE_Utils.FreezePaneRow1 ws
-End Sub
-
-' ---------------------------------------------------------------------------
-' GetOrCreateHistorySheet -- Return hidden history sheet
-' ---------------------------------------------------------------------------
-Private Function GetOrCreateHistorySheet(wb As Workbook) As Worksheet
+Private Function GetRegistrySheet(wb As Workbook) As Worksheet
     Dim ws As Worksheet
     On Error Resume Next
-    Set ws = wb.Worksheets(HISTORY_SHEET)
+    Set ws = wb.Worksheets(REG_SHEET)
     On Error GoTo 0
 
     If ws Is Nothing Then
-        Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
-        ws.Name = HISTORY_SHEET
+        Set ws = wb.Worksheets.Add
+        ws.Name = REG_SHEET
         ws.Visible = xlSheetVeryHidden
-        ' Header row
-        ws.Cells(1, 1).Value = "Version"
-        ws.Cells(1, 2).Value = "Timestamp"
-        ws.Cells(1, 3).Value = "Data Date"
-        ws.Cells(1, 4).Value = "User"
-        ws.Cells(1, 5).Value = "Rows"
-        ws.Cells(1, 6).Value = "Data"
-        DEE_Utils.ApplyTableHeader ws, 1, 1, 6
+        ws.Range("A1:F1").Value = Array("Version#", "Label", "Timestamp", "Sheet", "Rows", "Hash")
+        ws.Range("A1:F1").Font.Bold = True
+        ws.Range("A1:F1").Interior.Color = RGB(0, 32, 96)
+        ws.Range("A1:F1").Font.Color = RGB(255, 255, 255)
+        ws.Columns("A:F").AutoFit
+        ws.Columns("B").ColumnWidth = 20
+        ws.Columns("C").ColumnWidth = 22
     End If
 
-    Set GetOrCreateHistorySheet = ws
+    Set GetRegistrySheet = ws
 End Function
 
 ' ---------------------------------------------------------------------------
-' Base64Encode -- Encode string to Base64
+' NextVersionNumber -- Returns max version number in registry + 1
 ' ---------------------------------------------------------------------------
-Private Function Base64Encode(s As String) As String
-    Dim bytes() As Byte
-    bytes = StrConv(s, vbFromUnicode)
-    Dim xml As Object
-    Set xml = CreateObject("MSXML2.DOMDocument")
-    Dim node As Object
-    Set node = xml.createElement("b64")
-    node.DataType = "bin.base64"
-    node.nodeTypedValue = bytes
-    Base64Encode = Replace(node.text, vbLf, "")
+Private Function NextVersionNumber(reg As Worksheet) As Integer
+    Dim lastRow As Long
+    lastRow = DEE_Utils.LastRow(reg, REG_COL_NUM)
+    If lastRow < 2 Then
+        NextVersionNumber = 1
+        Exit Function
+    End If
+
+    Dim maxNum As Integer
+    maxNum = 0
+    Dim r As Long
+    For r = 2 To lastRow
+        Dim n As Integer
+        On Error Resume Next
+        n = CInt(reg.Cells(r, REG_COL_NUM).Value)
+        On Error GoTo 0
+        If n > maxNum Then maxNum = n
+    Next r
+
+    NextVersionNumber = maxNum + 1
 End Function
 
 ' ---------------------------------------------------------------------------
-' Base64Decode -- Decode Base64 string back to string
+' PruneOldVersions -- FIFO delete oldest versions when over the cap
 ' ---------------------------------------------------------------------------
-Private Function Base64Decode(s As String) As String
-    Dim xml As Object
-    Set xml = CreateObject("MSXML2.DOMDocument")
-    Dim node As Object
-    Set node = xml.createElement("b64")
-    node.DataType = "bin.base64"
-    node.text = s
-    Dim bytes() As Byte
-    bytes = node.nodeTypedValue
-    Base64Decode = StrConv(bytes, vbUnicode)
+Private Sub PruneOldVersions(wb As Workbook, reg As Worksheet)
+    Dim maxV As Integer
+    maxV = DEE_Settings.GetMaxVersions()
+    If maxV < 1 Then maxV = DEE_Config.MAX_VERSIONS
+
+    Dim lastRow As Long
+    lastRow = DEE_Utils.LastRow(reg, REG_COL_NUM)
+    Dim currentCount As Long
+    currentCount = lastRow - 1
+
+    Do While currentCount > maxV
+        Dim oldSheet As String
+        oldSheet = CStr(reg.Cells(2, REG_COL_SHEET).Value)
+
+        Dim wsOld As Worksheet
+        On Error Resume Next
+        Set wsOld = wb.Worksheets(oldSheet)
+        On Error GoTo 0
+        If Not wsOld Is Nothing Then
+            Application.DisplayAlerts = False
+            wsOld.Delete
+            Application.DisplayAlerts = True
+        End If
+
+        reg.Rows(2).Delete Shift:=xlUp
+        DEE_Logger.LogInfo "DEE_VersionHistory", "Pruned: " & oldSheet
+
+        lastRow = DEE_Utils.LastRow(reg, REG_COL_NUM)
+        currentCount = lastRow - 1
+    Loop
+End Sub
+
+' ---------------------------------------------------------------------------
+' ComputeSheetHash -- Lightweight fingerprint via MSXML2 Base64
+' Falls back to timestamp+rowcount string if MSXML2 unavailable
+' ---------------------------------------------------------------------------
+Private Function ComputeSheetHash(ws As Worksheet, rowCount As Long) As String
+    On Error GoTo HashFail
+
+    Dim sample As String
+    Dim r As Long
+    Dim maxSample As Long
+    maxSample = IIf(rowCount > 200, 200, rowCount)
+
+    For r = 2 To 1 + maxSample
+        sample = sample & "|" & CStr(ws.Cells(r, 1).Value) & _
+                          CStr(ws.Cells(r, 3).Value) & _
+                          CStr(ws.Cells(r, 4).Value)
+    Next r
+    sample = sample & "|n=" & rowCount & "|ts=" & Format(Now, "yyyymmddhhmmss")
+
+    Dim xmlDoc As Object
+    Set xmlDoc = CreateObject("MSXML2.DOMDocument")
+    Dim xmlNode As Object
+    Set xmlNode = xmlDoc.createElement("b")
+    xmlNode.DataType = "bin.base64"
+
+    Dim enc As Object
+    Set enc = CreateObject("System.Text.ASCIIEncoding")
+    xmlNode.nodeTypedValue = enc.GetBytes_4(sample)
+
+    ComputeSheetHash = Left(Replace(xmlNode.text, vbCrLf, ""), 32)
+    Exit Function
+
+HashFail:
+    ComputeSheetHash = Format(Now, "yyyymmddHHMMSS") & Right("000" & rowCount, 4)
 End Function

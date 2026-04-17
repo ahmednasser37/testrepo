@@ -247,15 +247,11 @@ if (-not $SkipInstall) {
         New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
     }
 
-    # Close Excel if open and has this add-in loaded (best effort)
+    # Check if Excel is open -- block install if so (file will be locked)
     $excelProcs = Get-Process -Name "EXCEL" -ErrorAction SilentlyContinue
     if ($excelProcs) {
-        Write-Warning "Excel is running. Please close Excel before installing the add-in."
-        $cont = Read-Host "Continue anyway? (y/N)"
-        if ($cont -ne 'y' -and $cont -ne 'Y') {
-            Write-Host "Installation cancelled."
-            exit 0
-        }
+        Write-Error "Excel is running. Close Excel completely before installing the add-in, then run this script again."
+        exit 1
     }
 
     Copy-Item $workXlamPath $OutputPath -Force

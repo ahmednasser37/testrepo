@@ -173,10 +173,12 @@ try {
 
     $xmlContent = Get-Content $customUIXml -Raw -Encoding UTF8
     $newEntry = $zip.CreateEntry("customUI/customUI14.xml")
-    $writer = New-Object System.IO.StreamWriter($newEntry.Open())
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $writer = New-Object System.IO.StreamWriter($newEntry.Open(), $utf8NoBom)
     $writer.Write($xmlContent)
+    $writer.Flush()
     $writer.Close()
-    Write-Host "  Wrote customUI/customUI14.xml"
+    Write-Host "  Wrote customUI/customUI14.xml ($($xmlContent.Length) chars)"
 
     # Update [Content_Types].xml
     $contentTypesEntry = $zip.GetEntry("[Content_Types].xml")
@@ -187,14 +189,15 @@ try {
 
         # Check if already has customUI override
         if ($ctContent -notmatch 'customUI14\.xml') {
-            # Add Override entry before closing tag
-            $newOverride = '<Override PartName="/customUI/customUI14.xml" ContentType="application/vnd.ms-office.activeX+xml"/>'
+            # Correct ContentType for Ribbon XML is application/xml
+            $newOverride = '<Override PartName="/customUI/customUI14.xml" ContentType="application/xml"/>'
             $ctContent = $ctContent -replace '</Types>', "$newOverride`n</Types>"
 
             $contentTypesEntry.Delete()
             $newCtEntry = $zip.CreateEntry("[Content_Types].xml")
-            $ctWriter = New-Object System.IO.StreamWriter($newCtEntry.Open())
+            $ctWriter = New-Object System.IO.StreamWriter($newCtEntry.Open(), $utf8NoBom)
             $ctWriter.Write($ctContent)
+            $ctWriter.Flush()
             $ctWriter.Close()
             Write-Host "  Updated [Content_Types].xml"
         } else {
@@ -215,8 +218,9 @@ try {
 
             $relsEntry.Delete()
             $newRelsEntry = $zip.CreateEntry("_rels/.rels")
-            $relsWriter = New-Object System.IO.StreamWriter($newRelsEntry.Open())
+            $relsWriter = New-Object System.IO.StreamWriter($newRelsEntry.Open(), $utf8NoBom)
             $relsWriter.Write($relsContent)
+            $relsWriter.Flush()
             $relsWriter.Close()
             Write-Host "  Updated _rels/.rels"
         } else {

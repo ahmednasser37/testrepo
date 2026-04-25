@@ -337,8 +337,8 @@ def build_project_info(tables: dict, activities_df: pd.DataFrame,
         "PV":                      round(pv,         2),
         "EV":                      round(ev_total,   2),
         "AC":                      round(ac_total,   2),
-        "SPI":                     round(spi,        4),
-        "CPI":                     round(cpi,        4),
+        "SPI":                     round(spi,        6),
+        "CPI":                     round(cpi,        6),
         "EAC":                     round(eac,        2),
         "VAC":                     round(vac,        2),
     }
@@ -482,6 +482,12 @@ def process(tables: dict) -> dict[str, pd.DataFrame]:
 
     scurve_df = build_scurve(activities_df, resources_df,
                              plan_start, plan_end, bac)
+
+    # Drop any internal helper columns before export
+    activities_df = activities_df.drop(
+        columns=[c for c in activities_df.columns if c.startswith("_")],
+        errors="ignore",
+    )
 
     return {
         "activities":   activities_df,

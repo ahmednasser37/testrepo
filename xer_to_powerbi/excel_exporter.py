@@ -138,8 +138,8 @@ _PROJ_FMTS = {
     "PV":   FMT_SAR,
     "EV":   FMT_SAR,
     "AC":   FMT_SAR,
-    "SPI":  FMT_DECIMAL,
-    "CPI":  FMT_DECIMAL,
+    "SPI":  "#,##0.0000",
+    "CPI":  "#,##0.0000",
     "EAC":  FMT_SAR,
     "VAC":  FMT_SAR,
 }

@@ -9,6 +9,15 @@ import pandas as pd
 from datetime import datetime
 
 
+# Canonical schema for the activities DataFrame — used for schema'd empty returns
+ACTIVITIES_COLUMNS = [
+    "task_id", "task_code", "task_name", "wbs_id", "wbs_name", "status",
+    "planned_start", "planned_finish", "actual_start", "actual_finish",
+    "original_duration", "remaining_duration", "phys_complete_pct", "zone",
+    "planned_pct", "variance_pct", "weight",
+]
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _to_dt(val) -> pd.Timestamp | None:
@@ -73,17 +82,19 @@ def _planned_pct(row: pd.Series, data_date: pd.Timestamp) -> float:
 # ── WBS helpers ───────────────────────────────────────────────────────────────
 
 def _build_wbs_level(wbs_df: pd.DataFrame) -> pd.DataFrame:
-    """Assign wbs_level (1/2/3) based on parent chain depth."""
+    """Assign wbs_level (1/2/3+) based on parent chain depth."""
     parent_map = dict(zip(wbs_df["wbs_id"], wbs_df["parent_wbs_id"]))
 
-    def depth(wid, memo={}):
+    memo: dict = {}
+
+    def depth(wid):
         if wid in memo:
             return memo[wid]
         parent = parent_map.get(wid, "")
         if not parent or parent == wid:
             memo[wid] = 1
         else:
-            memo[wid] = 1 + depth(parent, memo)
+            memo[wid] = 1 + depth(parent)
         return memo[wid]
 
     wbs_df = wbs_df.copy()
@@ -95,14 +106,46 @@ def _wbs_name_map(wbs_df: pd.DataFrame) -> dict[str, str]:
     return dict(zip(wbs_df["wbs_id"], wbs_df["wbs_name"]))
 
 
+def _rollup_wbs_costs(
+    cost_by_wbs: dict[str, tuple[float, float]],
+    wbs_df: pd.DataFrame,
+) -> dict[str, tuple[float, float]]:
+    """
+    Propagate leaf-level costs up the full WBS subtree.
+    Nodes are processed deepest-first so each parent accumulates
+    its complete subtree total in a single pass.
+    """
+    parent_map = dict(zip(wbs_df["wbs_id"], wbs_df["parent_wbs_id"]))
+    level_map  = dict(zip(wbs_df["wbs_id"], wbs_df["wbs_level"]))
+
+    # Sort descending by level → leaves processed before parents
+    ordered = sorted(wbs_df["wbs_id"].tolist(),
+                     key=lambda w: level_map.get(w, 0), reverse=True)
+
+    result = dict(cost_by_wbs)  # copy so we don't mutate the input
+
+    for wid in ordered:
+        parent = str(parent_map.get(wid, ""))
+        if not parent or parent == wid or parent == "nan":
+            continue
+        child_tc, child_ac = result.get(wid, (0.0, 0.0))
+        if child_tc == 0.0 and child_ac == 0.0:
+            continue
+        parent_tc, parent_ac = result.get(parent, (0.0, 0.0))
+        result[parent] = (parent_tc + child_tc, parent_ac + child_ac)
+
+    return result
+
+
 # ── Sheet builders ────────────────────────────────────────────────────────────
 
 def build_activities(tables: dict, data_date: pd.Timestamp) -> pd.DataFrame:
     task = tables.get("TASK", pd.DataFrame())
     wbs  = tables.get("WBS",  pd.DataFrame())
 
+    # Return schema'd empty DataFrame so downstream functions can safely check .empty
     if task.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=ACTIVITIES_COLUMNS)
 
     wbs_names = _wbs_name_map(wbs) if not wbs.empty else {}
 
@@ -151,7 +194,7 @@ def build_activities(tables: dict, data_date: pd.Timestamp) -> pd.DataFrame:
     df["planned_pct"] = df.apply(lambda r: _planned_pct(r, data_date), axis=1)
     df["variance_pct"] = df["phys_complete_pct"] - df["planned_pct"]
 
-    # Weight — filled after cost data is merged; placeholder = equal weight
+    # Weight — placeholder = equal weight; recalculated after cost data is merged
     n = len(df)
     df["weight"] = 1.0 / n if n > 0 else 0.0
 
@@ -165,9 +208,8 @@ def build_wbs_sheet(tables: dict, activities_df: pd.DataFrame,
         return pd.DataFrame()
 
     wbs = _build_wbs_level(wbs.copy())
-    parent_map = dict(zip(wbs["wbs_id"], wbs["parent_wbs_id"]))
 
-    # Aggregate costs from resource sheet
+    # Aggregate direct task costs at leaf WBS level
     cost_by_wbs: dict[str, tuple[float, float]] = {}
     if not resources_df.empty and not activities_df.empty:
         act_wbs = dict(zip(activities_df["task_id"], activities_df["wbs_id"]))
@@ -178,6 +220,9 @@ def build_wbs_sheet(tables: dict, activities_df: pd.DataFrame,
             if wid:
                 existing = cost_by_wbs.get(wid, (0.0, 0.0))
                 cost_by_wbs[wid] = (existing[0] + tc, existing[1] + ac)
+
+    # FIX (Codex P2): propagate child costs up to all ancestor WBS nodes
+    cost_by_wbs = _rollup_wbs_costs(cost_by_wbs, wbs)
 
     rows = []
     for _, w in wbs.iterrows():
@@ -218,8 +263,8 @@ def build_resources(tables: dict, activities_df: pd.DataFrame) -> pd.DataFrame:
     if not activities_df.empty:
         for _, a in activities_df.iterrows():
             act_info[str(a["task_id"])] = {
-                "task_name":       a.get("task_name", ""),
-                "wbs_id":          a.get("wbs_id", ""),
+                "task_name":         a.get("task_name", ""),
+                "wbs_id":            a.get("wbs_id", ""),
                 "phys_complete_pct": float(a.get("phys_complete_pct", 0)),
             }
 
@@ -242,22 +287,22 @@ def build_resources(tables: dict, activities_df: pd.DataFrame) -> pd.DataFrame:
         cv          = ev_cost - act_cost
 
         rows.append({
-            "task_id":       tid,
-            "task_name":     ainfo.get("task_name", ""),
-            "wbs_id":        ainfo.get("wbs_id", ""),
-            "rsrc_id":       rid,
-            "rsrc_name":     rinfo.get("rsrc_name", ""),
-            "rsrc_type":     rinfo.get("rsrc_type", ""),
+            "task_id":         tid,
+            "task_name":       ainfo.get("task_name", ""),
+            "wbs_id":          ainfo.get("wbs_id", ""),
+            "rsrc_id":         rid,
+            "rsrc_name":       rinfo.get("rsrc_name", ""),
+            "rsrc_type":       rinfo.get("rsrc_type", ""),
             "unit_of_measure": rinfo.get("unit_id", ""),
-            "unit_price":    unit_price,
-            "target_qty":    target_qty,
-            "act_qty":       act_qty,
-            "remain_qty":    remain_qty,
-            "target_cost":   target_cost,
-            "act_cost":      act_cost,
-            "ev_cost":       ev_cost,
-            "cv":            cv,
-            "is_material":   rinfo.get("rsrc_type", "") == "MT",
+            "unit_price":      unit_price,
+            "target_qty":      target_qty,
+            "act_qty":         act_qty,
+            "remain_qty":      remain_qty,
+            "target_cost":     target_cost,
+            "act_cost":        act_cost,
+            "ev_cost":         ev_cost,
+            "cv":              cv,
+            "is_material":     rinfo.get("rsrc_type", "") == "MT",
         })
 
     return pd.DataFrame(rows)
@@ -273,74 +318,87 @@ def build_project_info(tables: dict, activities_df: pd.DataFrame,
     else:
         proj_row = project.iloc[0].to_dict()
 
-    proj_id   = proj_row.get("proj_id",   "")
-    proj_name = proj_row.get("proj_name", proj_row.get("proj_short_name", ""))
+    proj_id    = proj_row.get("proj_id",   "")
+    proj_name  = proj_row.get("proj_name", proj_row.get("proj_short_name", ""))
     plan_start = _to_dt(proj_row.get("plan_start_date"))
     plan_end   = _to_dt(proj_row.get("plan_end_date"))
 
-    n_total     = len(activities_df)
-    n_completed = int((activities_df["status"] == "Completed").sum())
-    n_inprog    = int((activities_df["status"] == "In Progress").sum())
-
-    # Costs
-    if not resources_df.empty:
-        bac        = resources_df["target_cost"].sum()
-        ac_total   = resources_df["act_cost"].sum()
-        ev_total   = resources_df["ev_cost"].sum()
+    # FIX (Codex P1): guard against empty/missing TASK table
+    if activities_df.empty or "status" not in activities_df.columns:
+        n_total = n_completed = n_inprog = 0
+        overall_planned = overall_actual = overall_variance = 0.0
+        pv = bac = ac_total = ev_total = 0.0
+        spi = cpi = 0.0
+        eac = vac = 0.0
+        if not resources_df.empty:
+            bac      = resources_df["target_cost"].sum()
+            ac_total = resources_df["act_cost"].sum()
+            ev_total = resources_df["ev_cost"].sum()
+            eac      = bac
+            vac      = 0.0
     else:
-        bac = ac_total = ev_total = 0.0
+        n_total     = len(activities_df)
+        n_completed = int((activities_df["status"] == "Completed").sum())
+        n_inprog    = int((activities_df["status"] == "In Progress").sum())
 
-    # Weights based on cost — always normalised so Σweight == 1
-    activities_df = activities_df.copy()
-    if bac > 0 and not activities_df.empty:
-        cost_by_task = (
-            resources_df.groupby("task_id")["target_cost"].sum()
-            if not resources_df.empty else pd.Series(dtype=float)
-        )
-        activities_df["_tc"] = activities_df["task_id"].map(cost_by_task).fillna(0)
-        # Tasks with no cost get a proxy weight = average task cost
-        zero_mask = activities_df["_tc"] == 0
-        if zero_mask.any() and n_total > 0:
-            activities_df.loc[zero_mask, "_tc"] = bac / n_total
-        total_tc = activities_df["_tc"].sum()
-        activities_df["weight"] = (
-            activities_df["_tc"] / total_tc if total_tc > 0 else 1.0 / n_total
-        )
-    else:
-        activities_df["weight"] = 1.0 / n_total if n_total > 0 else 0.0
+        # Costs
+        if not resources_df.empty:
+            bac      = resources_df["target_cost"].sum()
+            ac_total = resources_df["act_cost"].sum()
+            ev_total = resources_df["ev_cost"].sum()
+        else:
+            bac = ac_total = ev_total = 0.0
 
-    overall_planned = (activities_df["planned_pct"] * activities_df["weight"]).sum()
-    overall_actual  = (activities_df["phys_complete_pct"] * activities_df["weight"]).sum()
-    overall_variance = overall_actual - overall_planned
+        # Weights based on cost — always normalised so Σweight == 1
+        activities_df = activities_df.copy()
+        if bac > 0:
+            cost_by_task = (
+                resources_df.groupby("task_id")["target_cost"].sum()
+                if not resources_df.empty else pd.Series(dtype=float)
+            )
+            activities_df["_tc"] = activities_df["task_id"].map(cost_by_task).fillna(0)
+            zero_mask = activities_df["_tc"] == 0
+            if zero_mask.any() and n_total > 0:
+                activities_df.loc[zero_mask, "_tc"] = bac / n_total
+            total_tc = activities_df["_tc"].sum()
+            activities_df["weight"] = (
+                activities_df["_tc"] / total_tc if total_tc > 0 else 1.0 / n_total
+            )
+        else:
+            activities_df["weight"] = 1.0 / n_total if n_total > 0 else 0.0
 
-    # PV = planned value to data_date (weighted planned cost)
-    pv = (activities_df["planned_pct"] / 100.0 * activities_df["weight"] * bac).sum()
+        overall_planned  = (activities_df["planned_pct"]       * activities_df["weight"]).sum()
+        overall_actual   = (activities_df["phys_complete_pct"] * activities_df["weight"]).sum()
+        overall_variance = overall_actual - overall_planned
 
-    spi = ev_total / pv      if pv      > 0 else 0.0
-    cpi = ev_total / ac_total if ac_total > 0 else 0.0
-    eac = bac / cpi           if cpi     > 0 else bac
-    vac = bac - eac
+        # PV = planned value to data_date
+        pv = (activities_df["planned_pct"] / 100.0 * activities_df["weight"] * bac).sum()
+
+        spi = ev_total / pv      if pv      > 0 else 0.0
+        cpi = ev_total / ac_total if ac_total > 0 else 0.0
+        eac = bac / cpi           if cpi     > 0 else bac
+        vac = bac - eac
 
     row = {
-        "project_id":              proj_id,
-        "project_name":            proj_name,
-        "data_date":               data_date,
-        "planned_start":           plan_start,
-        "planned_finish":          plan_end,
-        "total_activities":        n_total,
-        "completed_activities":    n_completed,
-        "inprogress_activities":   n_inprog,
-        "overall_planned_pct":     round(overall_planned, 2),
-        "overall_actual_pct":      round(overall_actual,  2),
-        "overall_variance_pct":    round(overall_variance, 2),
-        "BAC":                     round(bac,        2),
-        "PV":                      round(pv,         2),
-        "EV":                      round(ev_total,   2),
-        "AC":                      round(ac_total,   2),
-        "SPI":                     round(spi,        6),
-        "CPI":                     round(cpi,        6),
-        "EAC":                     round(eac,        2),
-        "VAC":                     round(vac,        2),
+        "project_id":             proj_id,
+        "project_name":           proj_name,
+        "data_date":              data_date,
+        "planned_start":          plan_start,
+        "planned_finish":         plan_end,
+        "total_activities":       n_total,
+        "completed_activities":   n_completed,
+        "inprogress_activities":  n_inprog,
+        "overall_planned_pct":    round(overall_planned,  2),
+        "overall_actual_pct":     round(overall_actual,   2),
+        "overall_variance_pct":   round(overall_variance, 2),
+        "BAC":                    round(bac,        2),
+        "PV":                     round(pv,         2),
+        "EV":                     round(ev_total,   2),
+        "AC":                     round(ac_total,   2),
+        "SPI":                    round(spi,        6),
+        "CPI":                    round(cpi,        6),
+        "EAC":                    round(eac,        2),
+        "VAC":                    round(vac,        2),
     }
 
     return pd.DataFrame([row])
@@ -374,11 +432,8 @@ def build_scurve(activities_df: pd.DataFrame,
     acts["act_cost"]    = acts["act_cost"].fillna(0)
 
     total_planned = acts["target_cost"].sum()
-    total_actual  = acts["act_cost"].sum()
 
     rows = []
-    cum_planned_cost = 0.0
-    cum_actual_cost  = 0.0
 
     for period_end in periods:
         period_planned_cost = 0.0
@@ -403,10 +458,9 @@ def build_scurve(activities_df: pd.DataFrame,
             # Planned cost earned up to period_end
             elapsed = min((period_end - ps).total_seconds(), span)
             elapsed = max(0, elapsed)
-            frac    = elapsed / span
-            period_planned_cost += tc * frac
+            period_planned_cost += tc * (elapsed / span)
 
-            # Actual cost: distribute proportionally if finished, else partial
+            # Actual cost: distribute proportionally
             astart = a.get("actual_start")
             aend   = a.get("actual_finish")
             if aend is not None and pd.notna(aend):
@@ -414,23 +468,21 @@ def build_scurve(activities_df: pd.DataFrame,
                     period_actual_cost += ac
             elif astart is not None and pd.notna(astart):
                 if astart <= period_end:
-                    # Estimate actual cost proportionally
-                    afrac = phys
                     period_actual_cost += ac * (
                         min((period_end - astart).total_seconds(), span) / span
                     )
 
-        cum_planned_cost = period_planned_cost
-        cum_actual_cost  = period_actual_cost
-
+        # FIX (Codex P1): both percentages share BAC as denominator so the
+        # gap between curves represents true cost/schedule slip.
+        # actual_cum_pct is intentionally uncapped — >100 signals cost overrun.
         rows.append({
             "period_date":       period_end.replace(day=1),
-            "planned_cum_pct":   round(cum_planned_cost / total_planned * 100, 2)
+            "planned_cum_pct":   round(period_planned_cost / total_planned * 100, 2)
                                  if total_planned > 0 else 0.0,
-            "actual_cum_pct":    round(cum_actual_cost / total_actual * 100, 2)
-                                 if total_actual  > 0 else 0.0,
-            "planned_cum_cost":  round(cum_planned_cost,  2),
-            "actual_cum_cost":   round(cum_actual_cost,   2),
+            "actual_cum_pct":    round(period_actual_cost  / total_planned * 100, 2)
+                                 if total_planned > 0 else 0.0,
+            "planned_cum_cost":  round(period_planned_cost, 2),
+            "actual_cum_cost":   round(period_actual_cost,  2),
         })
 
     return pd.DataFrame(rows)
@@ -459,8 +511,8 @@ def process(tables: dict) -> dict[str, pd.DataFrame]:
     project_df    = build_project_info(tables, activities_df,
                                        resources_df, data_date)
 
-    # Sync final normalised weights from project_df into activities for scurve
-    if not project_df.empty:
+    # Sync final normalised weights into activities for downstream use
+    if not project_df.empty and not activities_df.empty:
         bac = float(project_df.iloc[0].get("BAC", 0))
         if bac > 0 and not resources_df.empty:
             cost_by_task = resources_df.groupby("task_id")["target_cost"].sum()
@@ -483,7 +535,7 @@ def process(tables: dict) -> dict[str, pd.DataFrame]:
     scurve_df = build_scurve(activities_df, resources_df,
                              plan_start, plan_end, bac)
 
-    # Drop any internal helper columns before export
+    # Drop internal helper columns before export
     activities_df = activities_df.drop(
         columns=[c for c in activities_df.columns if c.startswith("_")],
         errors="ignore",

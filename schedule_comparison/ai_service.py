@@ -1,0 +1,180 @@
+"""
+AI summary service — wraps OpenRouter API with local file caching.
+Sends only compact structured context; never sends raw XER content.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import requests
+
+from comparison_engine import ComparisonResult
+
+_CACHE_DIR = Path(os.environ.get("SCE_CACHE_DIR", "/tmp/sce_cache"))
+_DEFAULT_MODEL = "deepseek/deepseek-chat-v3-0324:free"
+_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+_STUB: dict = {
+    "executive_summary": "AI summary unavailable — set OPENROUTER_API_KEY to enable.",
+    "key_risks": [],
+    "main_variances": [],
+    "schedule_health": "unknown",
+    "recommended_actions": [],
+}
+
+
+# ── Cache helpers ─────────────────────────────────────────────────────────────
+
+def cache_key(baseline_content: bytes, updated_content: bytes) -> str:
+    """Return a SHA256 hex digest of both file contents concatenated."""
+    h = hashlib.sha256()
+    h.update(baseline_content)
+    h.update(b"\x00")
+    h.update(updated_content)
+    return h.hexdigest()
+
+
+def _cache_path(key: str) -> Path:
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return _CACHE_DIR / f"{key[:16]}.json"
+
+
+def load_cached(key: str) -> dict | None:
+    p = _cache_path(key)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def save_cached(key: str, data: dict) -> None:
+    try:
+        _cache_path(key).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+# ── Prompt builder ────────────────────────────────────────────────────────────
+
+def build_prompt(result: ComparisonResult) -> str:
+    s = result.summary
+
+    def _fmt(dt) -> str:
+        if dt is None:
+            return "N/A"
+        try:
+            return dt.strftime("%Y-%m-%d")
+        except Exception:
+            return str(dt)
+
+    context = {
+        "baseline_project": result.baseline_project_name,
+        "updated_project": result.updated_project_name,
+        "baseline_data_date": _fmt(result.baseline_data_date),
+        "updated_data_date": _fmt(result.updated_data_date),
+        "data_date_warning": result.data_date_warning,
+        "summary": {
+            "total_baseline_activities": s.get("total_baseline", 0),
+            "total_updated_activities": s.get("total_updated", 0),
+            "added": s.get("added", 0),
+            "deleted": s.get("deleted", 0),
+            "changed": s.get("changed", 0),
+            "unchanged": s.get("unchanged", 0),
+            "delayed_activities": s.get("delayed_activities", 0),
+            "improved_activities": s.get("improved_activities", 0),
+            "critical_activities": s.get("critical_activities_updated", 0),
+            "max_delay_days": s.get("max_delay_days", 0),
+            "avg_finish_variance_days": s.get("avg_finish_variance_days", 0),
+            "relationships_added": s.get("relationships_added", 0),
+            "relationships_deleted": s.get("relationships_deleted", 0),
+            "relationships_changed": s.get("relationships_changed", 0),
+        },
+        "top_delayed_activities": s.get("top_delayed", [])[:10],
+    }
+
+    return (
+        "You are a senior Primavera P6 schedule analyst. "
+        "Analyze this schedule comparison and return ONLY valid JSON — no markdown, no code blocks.\n\n"
+        f"SCHEDULE COMPARISON DATA:\n{json.dumps(context, indent=2)}\n\n"
+        "Return exactly this JSON structure:\n"
+        "{\n"
+        '  "executive_summary": "<2-3 sentence overview of schedule health and key changes>",\n'
+        '  "key_risks": ["<risk 1>", "<risk 2>", ...],\n'
+        '  "main_variances": ["<variance description 1>", ...],\n'
+        '  "schedule_health": "<one of: on_track | at_risk | critical>",\n'
+        '  "recommended_actions": ["<action 1>", "<action 2>", ...]\n'
+        "}"
+    )
+
+
+# ── OpenRouter call ───────────────────────────────────────────────────────────
+
+def call_openrouter(prompt: str, api_key: str, model: str = _DEFAULT_MODEL) -> dict:
+    """Call the OpenRouter chat completions endpoint and return parsed JSON response."""
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "max_tokens": 800,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ahmednasser37/testrepo",
+        "X-Title": "P6 Schedule Comparison",
+    }
+    resp = requests.post(_OPENROUTER_URL, json=payload, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    content = data["choices"][0]["message"]["content"].strip()
+
+    # Strip markdown code fences if present
+    if content.startswith("```"):
+        lines = content.splitlines()
+        content = "\n".join(
+            line for line in lines
+            if not line.strip().startswith("```")
+        ).strip()
+
+    return json.loads(content)
+
+
+# ── Public entry ──────────────────────────────────────────────────────────────
+
+def get_ai_summary(
+    result: ComparisonResult,
+    ck: str,
+    api_key: str | None = None,
+    model: str = _DEFAULT_MODEL,
+) -> dict:
+    """
+    Return an AI-written schedule summary dict.
+    Uses cache if available. Falls back to stub if no API key is set.
+    """
+    cached = load_cached(ck)
+    if cached is not None:
+        return cached
+
+    if not api_key:
+        return dict(_STUB)
+
+    try:
+        prompt = build_prompt(result)
+        summary = call_openrouter(prompt, api_key, model)
+        # Validate expected keys exist
+        for key in ("executive_summary", "key_risks", "schedule_health"):
+            if key not in summary:
+                summary[key] = _STUB[key]
+        save_cached(ck, summary)
+        return summary
+    except Exception as exc:
+        stub = dict(_STUB)
+        stub["executive_summary"] = f"AI summary failed: {exc}"
+        return stub

@@ -3,384 +3,69 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Schedule Comparison — {{ result.updated_project_name or "Report" }}</title>
+  <title>Schedule Dashboard — {{ data.project.updated_name or "Report" }}</title>
   <link rel="stylesheet" href="/static/style.css">
-  <script src="https://unpkg.com/@antv/g2@5/dist/g2.min.js"></script>
+  <script>
+    window.__DASH__ = {{ data | tojson }};
+    window.__KEY__ = "{{ key }}";
+  </script>
 </head>
 <body>
-  <div class="page-wrap">
-
-    <!-- Header -->
+  <div class="app-shell">
     <header class="dash-header">
       <div class="dash-header-top">
         <a href="/" class="btn-back">← New Comparison</a>
         <div class="export-links">
-          <a href="/export/csv?key={{ cache_key }}"  class="btn-secondary">⬇ CSV</a>
-          <a href="/export/json?key={{ cache_key }}" class="btn-secondary">⬇ JSON</a>
+          <a href="/export/csv?key={{ key }}" class="btn-secondary">⬇ CSV</a>
+          <a href="/export/json?key={{ key }}" class="btn-secondary">⬇ JSON</a>
         </div>
       </div>
-
-      <h1>Schedule Comparison Report</h1>
-
       <div class="project-flow">
-        <span class="proj-pill proj-pill-baseline">
-          📋 {{ result.baseline_project_name or "Baseline" }}
-        </span>
+        <div class="proj-block">
+          <span class="proj-badge baseline-badge">Baseline</span>
+          <span class="proj-name">{{ data.project.baseline_name or "Baseline" }}</span>
+          <span class="proj-date">{{ data.project.baseline_data_date or "—" }}</span>
+        </div>
         <span class="proj-arrow">→</span>
-        <span class="proj-pill proj-pill-updated">
-          🔄 {{ result.updated_project_name or "Updated" }}
-        </span>
-      </div>
-
-      <div class="date-row">
-        <span class="date-chip">Baseline <strong>{{ baseline_date }}</strong></span>
-        <span class="date-chip">Updated <strong>{{ updated_date }}</strong></span>
-        {% if result.data_date_warning %}
-        <span class="date-chip warning-chip">⚠ Data dates differ</span>
+        <div class="proj-block">
+          <span class="proj-badge updated-badge">Updated</span>
+          <span class="proj-name">{{ data.project.updated_name or "Updated" }}</span>
+          <span class="proj-date">{{ data.project.updated_data_date or "—" }}</span>
+        </div>
+        {% if data.project.data_date_warning %}
+        <span class="warn-chip">⚠ Data dates differ</span>
         {% endif %}
       </div>
     </header>
 
-    <!-- Summary stat cards -->
-    <section class="stats-grid">
-      <div class="stat-card stat-card-added">
-        <div class="stat-num stat-num-added">{{ result.summary.added }}</div>
-        <div class="stat-label">Added</div>
-      </div>
-      <div class="stat-card stat-card-deleted">
-        <div class="stat-num stat-num-deleted">{{ result.summary.deleted }}</div>
-        <div class="stat-label">Deleted</div>
-      </div>
-      <div class="stat-card stat-card-changed">
-        <div class="stat-num stat-num-changed">{{ result.summary.changed }}</div>
-        <div class="stat-label">Changed</div>
-      </div>
-      <div class="stat-card stat-card-unchanged">
-        <div class="stat-num stat-num-unchanged">{{ result.summary.unchanged }}</div>
-        <div class="stat-label">Unchanged</div>
-      </div>
-      <div class="stat-card stat-card-delayed">
-        <div class="stat-num stat-num-red">{{ result.summary.delayed_activities }}</div>
-        <div class="stat-label">Delayed &gt;5d</div>
-      </div>
-      <div class="stat-card stat-card-improved">
-        <div class="stat-num stat-num-green">{{ result.summary.improved_activities }}</div>
-        <div class="stat-label">Improved</div>
-      </div>
-      <div class="stat-card stat-card-delay">
-        <div class="stat-num {% if result.summary.max_delay_days > 14 %}stat-num-red{% elif result.summary.max_delay_days > 0 %}stat-num-orange{% else %}stat-num-green{% endif %}">
-          {{ result.summary.max_delay_days }}d
-        </div>
-        <div class="stat-label">Max Delay</div>
-      </div>
-      <div class="stat-card stat-card-critical">
-        <div class="stat-num {% if result.summary.critical_activities_updated > 0 %}stat-num-red{% else %}stat-num-green{% endif %}">
-          {{ result.summary.critical_activities_updated }}
-        </div>
-        <div class="stat-label">Critical</div>
-      </div>
-    </section>
+    <nav class="tab-nav" id="tab-nav">
+      <button class="tab-btn active" data-tab="overview">Overview</button>
+      <button class="tab-btn" data-tab="schedule">Schedule</button>
+      <button class="tab-btn" data-tab="kpis">KPIs</button>
+      <button class="tab-btn" data-tab="lookahead">Lookahead</button>
+      <button class="tab-btn" data-tab="milestones">Milestones</button>
+      <button class="tab-btn" data-tab="procurement">Procurement</button>
+      <button class="tab-btn" data-tab="ev">Earned Value</button>
+      <button class="tab-btn" data-tab="wbs">WBS</button>
+      <button class="tab-btn" data-tab="logic">Logic</button>
+      <button class="tab-btn" data-tab="chat">AI Chat</button>
+    </nav>
 
-    <!-- AI narrative -->
-    <section class="card ai-card">
-      <div class="ai-header">
-        <div>
-          <div class="ai-header-label">AI Analysis</div>
-          <h2>Schedule Health Assessment</h2>
-        </div>
-        {% set health = ai_summary.get('schedule_health', 'unknown') %}
-        <span class="health-badge health-{{ health }}">
-          {% if health == 'on_track' %}On Track
-          {% elif health == 'at_risk' %}At Risk
-          {% elif health == 'critical' %}Critical
-          {% else %}Unknown{% endif %}
-        </span>
-      </div>
+    <main class="tab-content">
+      <div id="panel-overview" class="tab-panel active"></div>
+      <div id="panel-schedule" class="tab-panel"></div>
+      <div id="panel-kpis" class="tab-panel"></div>
+      <div id="panel-lookahead" class="tab-panel"></div>
+      <div id="panel-milestones" class="tab-panel"></div>
+      <div id="panel-procurement" class="tab-panel"></div>
+      <div id="panel-ev" class="tab-panel"></div>
+      <div id="panel-wbs" class="tab-panel"></div>
+      <div id="panel-logic" class="tab-panel"></div>
+      <div id="panel-chat" class="tab-panel"></div>
+    </main>
+  </div>
 
-      <p class="ai-summary">{{ ai_summary.get('executive_summary', '') }}</p>
-
-      {% if ai_summary.get('key_risks') or ai_summary.get('main_variances') or ai_summary.get('recommended_actions') %}
-      <div class="ai-grid">
-        {% if ai_summary.get('key_risks') %}
-        <div class="ai-section">
-          <h3>Key Risks</h3>
-          <ul>{% for r in ai_summary.key_risks %}<li>{{ r }}</li>{% endfor %}</ul>
-        </div>
-        {% endif %}
-        {% if ai_summary.get('main_variances') %}
-        <div class="ai-section">
-          <h3>Main Variances</h3>
-          <ul>{% for v in ai_summary.main_variances %}<li>{{ v }}</li>{% endfor %}</ul>
-        </div>
-        {% endif %}
-        {% if ai_summary.get('recommended_actions') %}
-        <div class="ai-section">
-          <h3>Recommended Actions</h3>
-          <ul>{% for a in ai_summary.recommended_actions %}<li>{{ a }}</li>{% endfor %}</ul>
-        </div>
-        {% endif %}
-      </div>
-      {% endif %}
-    </section>
-
-    <!-- Charts -->
-    <section class="charts-grid">
-      <div class="card chart-card">
-        <h2>Activity Change Distribution</h2>
-        <p class="chart-hint">Breakdown of all activities by change type.</p>
-        <div id="chart-distribution"></div>
-      </div>
-      <div class="card chart-card">
-        <h2>Top Delayed Activities</h2>
-        <p class="chart-hint">Top activities by finish date slippage (days).</p>
-        <div id="chart-delays"></div>
-      </div>
-    </section>
-
-    <div class="card chart-card chart-wide">
-      <h2>Finish Date Scatter</h2>
-      <p class="chart-hint">Each point is an activity. X = baseline finish, Y = updated finish. Points above the diagonal line are delayed; below are improved.</p>
-      <div id="chart-scatter"></div>
-    </div>
-
-    <!-- Activity variance table -->
-    <section class="card table-card">
-      <div class="table-header">
-        <h2>Activity Variances</h2>
-        <div class="table-controls">
-          <input type="text" id="table-search" placeholder="Search activities…" oninput="filterTable()">
-          <select id="type-filter" onchange="filterTable()">
-            <option value="">All types</option>
-            <option value="added">Added</option>
-            <option value="deleted">Deleted</option>
-            <option value="changed">Changed</option>
-            <option value="unchanged">Unchanged</option>
-          </select>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table id="activity-table">
-          <thead>
-            <tr>
-              <th onclick="sortTable(0)">Code ↕</th>
-              <th onclick="sortTable(1)">Activity Name ↕</th>
-              <th>WBS</th>
-              <th onclick="sortTable(3)">Type ↕</th>
-              <th>Status</th>
-              <th onclick="sortTable(5)">Start Δ</th>
-              <th onclick="sortTable(6)">Finish Δ</th>
-              <th onclick="sortTable(7)">Dur Δ</th>
-              <th onclick="sortTable(8)">% Δ</th>
-              <th>BL Finish</th>
-              <th>Upd Finish</th>
-              <th>Crit</th>
-            </tr>
-          </thead>
-          <tbody id="table-body">
-            {% for v in result.activity_variances %}
-            <tr class="row-{{ v.change_type }}" data-type="{{ v.change_type }}">
-              <td class="td-code">{{ v.task_code }}</td>
-              <td class="td-name">{{ v.task_name }}</td>
-              <td class="td-wbs">{{ v.wbs_name }}</td>
-              <td><span class="tag tag-{{ v.change_type }}">{{ v.change_type }}</span></td>
-              <td class="td-status">
-                {% if v.old_status and v.new_status and v.old_status != v.new_status %}
-                  <span class="status-from">{{ v.old_status }}</span>
-                  <span class="status-arrow">→</span>
-                  <span class="status-to">{{ v.new_status }}</span>
-                {% elif v.old_status %}{{ v.old_status }}
-                {% elif v.new_status %}{{ v.new_status }}
-                {% else %}—{% endif %}
-              </td>
-              <td class="td-num {{ 'td-pos' if v.start_variance_days > 0 else ('td-neg' if v.start_variance_days < 0 else '') }}">
-                {{ "%+.1f"|format(v.start_variance_days) if v.start_variance_days != 0 else "—" }}
-              </td>
-              <td class="td-num {{ 'td-pos' if v.finish_variance_days > 0 else ('td-neg' if v.finish_variance_days < 0 else '') }}">
-                {{ "%+.1f"|format(v.finish_variance_days) if v.finish_variance_days != 0 else "—" }}
-              </td>
-              <td class="td-num {{ 'td-pos' if v.duration_variance_days > 0 else ('td-neg' if v.duration_variance_days < 0 else '') }}">
-                {{ "%+.1f"|format(v.duration_variance_days) if v.duration_variance_days != 0 else "—" }}
-              </td>
-              <td class="td-num {{ 'td-pos' if v.pct_complete_change > 0 else ('td-neg' if v.pct_complete_change < 0 else '') }}">
-                {{ "%+.1f%%"|format(v.pct_complete_change) if v.pct_complete_change != 0 else "—" }}
-              </td>
-              <td class="td-num">{{ v.baseline_finish or "—" }}</td>
-              <td class="td-num">{{ v.updated_finish or "—" }}</td>
-              <td>
-                {% if v.is_critical %}
-                <span class="critical-badge">● Critical</span>
-                {% else %}—{% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <div class="table-footer">
-        Showing <strong><span id="visible-count">{{ result.activity_variances|length }}</span></strong>
-        of {{ result.activity_variances|length }} activities
-      </div>
-    </section>
-
-    <!-- Relationship changes -->
-    {% if result.relationship_variances %}
-    <section class="card table-card">
-      <div class="section-divider">
-        <h2>Logic / Relationship Changes</h2>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Predecessor</th>
-              <th>Successor</th>
-              <th>Change</th>
-              <th>Old Type</th>
-              <th>New Type</th>
-              <th>Lag Δ (hrs)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for r in result.relationship_variances %}
-            <tr class="row-{{ r.change_type }}">
-              <td class="td-code">{{ r.pred_code }}</td>
-              <td class="td-code">{{ r.succ_code }}</td>
-              <td><span class="tag tag-{{ r.change_type }}">{{ r.change_type }}</span></td>
-              <td>{{ r.old_pred_type or "—" }}</td>
-              <td>{{ r.new_pred_type or "—" }}</td>
-              <td class="td-num {{ 'td-pos' if r.lag_change_hours > 0 else ('td-neg' if r.lag_change_hours < 0 else '') }}">
-                {{ "%+.1f"|format(r.lag_change_hours) if r.lag_change_hours != 0 else "—" }}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </section>
-    {% endif %}
-
-  </div><!-- /page-wrap -->
-
-  <script>
-    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const C = {
-      added:   dark ? '#4ade80' : '#22c55e',
-      deleted: dark ? '#fb7185' : '#ef4444',
-      changed: dark ? '#fbbf24' : '#f59e0b',
-      neutral: dark ? '#64748b' : '#94a3b8',
-    };
-    const theme = dark ? 'classicDark' : 'classic';
-
-    const chartData = {{ chart_data | tojson }};
-
-    // Distribution chart
-    (() => {
-      const data = chartData.dist_labels.map((type, i) => ({ type, count: chartData.dist_values[i] }));
-      const chart = new G2.Chart({ container: 'chart-distribution', autoFit: true, height: 280, theme });
-      chart.options({
-        type: 'interval',
-        data,
-        encode: { x: 'type', y: 'count', color: 'type' },
-        scale: { color: { type: 'ordinal', domain: chartData.dist_labels, range: chartData.dist_colors } },
-        label: { text: 'count', position: 'top' },
-        style: { radiusTopLeft: 4, radiusTopRight: 4 },
-        legend: false,
-      });
-      chart.render();
-    })();
-
-    // Delay chart
-    if (chartData.delay_codes.length > 0) {
-      const data = chartData.delay_codes.map((code, i) => ({ code, days: chartData.delay_days[i] }));
-      const chart = new G2.Chart({ container: 'chart-delays', autoFit: true, height: Math.max(200, data.length * 30 + 60), theme });
-      chart.options({
-        type: 'interval',
-        data,
-        encode: { x: 'code', y: 'days' },
-        coordinate: { transform: [{ type: 'transpose' }] },
-        style: { fill: C.deleted, radiusTopRight: 4, radiusBottomRight: 4 },
-        label: { text: d => d.days + ' d', position: 'right' },
-        axis: { x: { grid: null }, y: { title: 'Days Delayed' } },
-        legend: false,
-      });
-      chart.render();
-    } else {
-      document.getElementById('chart-delays').innerHTML = '<p class="no-data">No delayed activities detected.</p>';
-    }
-
-    // Scatter chart
-    if (chartData.scatter_x.length > 0) {
-      const scatterData = chartData.scatter_x.map((baseline, i) => ({
-        baseline,
-        updated: chartData.scatter_y[i],
-        label: chartData.scatter_labels[i],
-        type: chartData.scatter_types[i],
-      }));
-      const allDates = [...chartData.scatter_x, ...chartData.scatter_y].filter(Boolean).sort();
-      const refData = allDates.length >= 2
-        ? [{ baseline: allDates[0], updated: allDates[0] }, { baseline: allDates.at(-1), updated: allDates.at(-1) }]
-        : [];
-
-      const chart = new G2.Chart({ container: 'chart-scatter', autoFit: true, height: 380, theme });
-      chart.options({
-        type: 'view',
-        scale: { x: { type: 'time' }, y: { type: 'time' } },
-        axis: { x: { title: 'Baseline Finish' }, y: { title: 'Updated Finish' } },
-        children: [
-          {
-            type: 'point',
-            data: scatterData,
-            encode: { x: 'baseline', y: 'updated', color: 'type' },
-            scale: { color: { type: 'ordinal', domain: ['changed', 'added', 'deleted', 'unchanged'], range: [C.changed, C.added, C.deleted, C.neutral] } },
-            style: { r: 4, fillOpacity: 0.85 },
-            tooltip: { items: [{ channel: 'x', name: 'Baseline' }, { channel: 'y', name: 'Updated' }, { field: 'label', name: 'Activity' }] },
-          },
-          ...(refData.length >= 2 ? [{
-            type: 'line',
-            data: refData,
-            encode: { x: 'baseline', y: 'updated' },
-            style: { stroke: C.neutral, lineDash: [4, 4], lineWidth: 1.5 },
-            tooltip: false,
-          }] : []),
-        ],
-      });
-      chart.render();
-    } else {
-      document.getElementById('chart-scatter').innerHTML = '<p class="no-data">No finish date data available.</p>';
-    }
-
-    // Table filter & sort
-    let sortCol = -1, sortAsc = true;
-
-    function filterTable() {
-      const search = document.getElementById('table-search').value.toLowerCase();
-      const type   = document.getElementById('type-filter').value;
-      const rows   = document.querySelectorAll('#table-body tr');
-      let visible  = 0;
-      rows.forEach(row => {
-        const matchType   = !type   || row.dataset.type === type;
-        const matchSearch = !search || row.textContent.toLowerCase().includes(search);
-        const show = matchType && matchSearch;
-        row.style.display = show ? '' : 'none';
-        if (show) visible++;
-      });
-      document.getElementById('visible-count').textContent = visible;
-    }
-
-    function sortTable(col) {
-      const tbody = document.getElementById('table-body');
-      const rows  = Array.from(tbody.querySelectorAll('tr'));
-      if (sortCol === col) sortAsc = !sortAsc;
-      else { sortCol = col; sortAsc = true; }
-      rows.sort((a, b) => {
-        const av = a.cells[col]?.textContent.trim() || '';
-        const bv = b.cells[col]?.textContent.trim() || '';
-        const an = parseFloat(av), bn = parseFloat(bv);
-        const cmp = (!isNaN(an) && !isNaN(bn)) ? an - bn : av.localeCompare(bv);
-        return sortAsc ? cmp : -cmp;
-      });
-      rows.forEach(r => tbody.appendChild(r));
-    }
-  </script>
+  <script src="https://unpkg.com/@antv/g2@5/dist/g2.min.js"></script>
+  <script src="/static/dashboard.js"></script>
 </body>
 </html>

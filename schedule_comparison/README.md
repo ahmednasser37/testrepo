@@ -1,49 +1,58 @@
-# Schedule Comparison App
+---
+title: P6 Schedule Comparison
+emoji: 📊
+colorFrom: indigo
+colorTo: blue
+sdk: docker
+pinned: false
+app_port: 7860
+---
 
-A Flask web application that accepts two Primavera P6 XER files (baseline + updated), compares them, and renders an interactive HTML dashboard with an AI-written narrative via OpenRouter.
+# P6 Schedule Comparison
 
-## Prerequisites
+Upload two Primavera P6 XER files (baseline + updated) and get an instant 10-tab Project Controls dashboard.
 
-Python 3.11+ recommended.
+## Tabs
+
+| Tab | What you get |
+|-----|-------------|
+| Overview | Summary stats, AI health assessment, top delayed activities |
+| Schedule | Full activity variance table with search & filter |
+| KPIs | Float consumption, weighted % complete, SPI, schedule delay |
+| Lookahead | Overdue / 2-week / 4-week / 6-week activity windows |
+| Milestones | Milestone tracker with late / at-risk / on-track badges |
+| Procurement | Auto-detected procurement WBS items |
+| Earned Value | EV metrics (BAC, SPI, CPI, EAC) + S-curves |
+| WBS | WBS hierarchy summary |
+| Logic | Relationship (predecessor) changes |
+| AI Chat | Ask questions about the schedule via streaming AI |
+
+## Local setup
 
 ```bash
 cd schedule_comparison
 pip install -r requirements.txt
+cp .env.example .env   # fill in OPENROUTER_API_KEY
+source .env
+python app.py          # http://localhost:5000
 ```
 
-## Run
+## Environment variables (Space secrets)
 
-```bash
-python app.py
-# Open http://localhost:5000
-```
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENROUTER_API_KEY` | Optional | Enables AI narrative + chat (`deepseek/deepseek-chat-v3-0324:free` by default) |
+| `OPENROUTER_MODEL` | Optional | Override the default model |
+| `SCE_UPLOAD_MAX_MB` | Optional | Max file size in MB (default 50) |
 
-Or with Flask dev server:
+## File requirements
 
-```bash
-FLASK_APP=app.py FLASK_DEBUG=1 flask run
-```
+- Primavera P6 `.XER` format
+- Must contain `PROJECT` and `TASK` tables
+- Max 50 MB per file
 
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `OPENROUTER_API_KEY` | *(unset)* | API key for AI narrative. If unset, a stub message is shown. |
-| `OPENROUTER_MODEL` | `deepseek/deepseek-chat-v3-0324:free` | OpenRouter model ID |
-| `SCE_CACHE_DIR` | `/tmp/sce_cache` | Directory for AI response and export caches |
-| `SCE_UPLOAD_MAX_MB` | `50` | Maximum upload size per file (MB) |
-| `PORT` | `5000` | HTTP listen port |
-
-Copy `.env.example` to `.env` and fill in your key, then `source .env` before starting.
-
-## Run Tests
+## Run tests
 
 ```bash
 python -m pytest tests/ -v
 ```
-
-## Usage
-
-1. Open the app and upload two `.xer` files — label them *Baseline* and *Updated*.
-2. Click **Compare** — the dashboard renders immediately.
-3. Use the export buttons to download the activity variance table as **CSV** or the full comparison as **JSON**.

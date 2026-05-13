@@ -19,11 +19,27 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_SPACE: ahmednasser37/p6-compare
+          HF_SPACE_NAME: p6-compare
+          HF_USERNAME: ahmednasser37
         run: |
           git config --global user.email "ci@github.com"
           git config --global user.name "GitHub Actions"
 
-          # Clone (or init) the HF Space
+          # Create the Space if it doesn't exist
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://huggingface.co/api/spaces/${HF_SPACE}" \
+            -H "Authorization: Bearer ${HF_TOKEN}")
+
+          if [ "$HTTP_STATUS" = "404" ]; then
+            echo "Space not found — creating it..."
+            curl -s -X POST "https://huggingface.co/api/repos/create" \
+              -H "Authorization: Bearer ${HF_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"type\":\"space\",\"name\":\"${HF_SPACE_NAME}\",\"sdk\":\"docker\",\"private\":false}"
+            sleep 5
+          fi
+
+          # Clone the Space
           git clone https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE} hf_space || true
 
           if [ ! -d hf_space ]; then

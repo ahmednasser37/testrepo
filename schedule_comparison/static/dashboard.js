@@ -83,17 +83,21 @@ function renderG2Line(containerId, data, xField, yField, colorField, height = 28
 /* ── Tab routing ─────────────────────────────────────────────────────────── */
 
 function activateTab(name) {
-  // Update buttons
+  // Update buttons with ARIA
   document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.tab === name);
+    const isActive = btn.dataset.tab === name;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
   });
-  // Show/hide panels
+  // Show/hide panels with ARIA
   document.querySelectorAll('.tab-panel').forEach(panel => {
     panel.classList.remove('active');
+    panel.setAttribute('aria-hidden', 'true');
   });
   const panel = document.getElementById('panel-' + name);
   if (!panel) return;
   panel.classList.add('active');
+  panel.setAttribute('aria-hidden', 'false');
 
   // Render if not yet done
   if (!rendered.has(name)) {
@@ -158,35 +162,25 @@ function renderOverview(el) {
     : '';
 
   el.innerHTML = `
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-num stat-num-green">${S.added != null ? S.added : 0}</div>
-        <div class="stat-label">Added</div>
+    <div class="summary-bar">
+      <div class="summary-group">
+        <span class="summary-group-label">Changes</span>
+        <div class="summary-metrics">
+          <div class="summary-metric"><span class="summary-val added">${S.added != null ? S.added : 0}</span><span class="summary-key">Added</span></div>
+          <div class="summary-metric"><span class="summary-val deleted">${S.deleted != null ? S.deleted : 0}</span><span class="summary-key">Deleted</span></div>
+          <div class="summary-metric"><span class="summary-val changed">${S.changed != null ? S.changed : 0}</span><span class="summary-key">Changed</span></div>
+          <div class="summary-metric"><span class="summary-val muted">${S.unchanged != null ? S.unchanged : 0}</span><span class="summary-key">Unchanged</span></div>
+        </div>
       </div>
-      <div class="stat-card">
-        <div class="stat-num stat-num-red">${S.deleted != null ? S.deleted : 0}</div>
-        <div class="stat-label">Deleted</div>
-      </div>
-      <div class="stat-card"><div class="stat-num stat-num-orange">${S.changed != null ? S.changed : 0}</div><div class="stat-label"> Changed</div></div>
-      <div class="stat-card">
-        <div class="stat-num stat-num-muted">${S.unchanged != null ? S.unchanged : 0}</div>
-        <div class="stat-label">Unchanged</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-num-orange">${delayed5}</div>
-        <div class="stat-label">Delayed &gt;5d</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-num-red">${maxDelay}</div>
-        <div class="stat-label">Max Delay</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-num-blue">${avgVar}</div>
-        <div class="stat-label">Avg Variance</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-num-red">${critical}</div>
-        <div class="stat-label">Critical</div>
+      <div class="summary-divider"></div>
+      <div class="summary-group">
+        <span class="summary-group-label">Schedule Health</span>
+        <div class="summary-metrics">
+          <div class="summary-metric"><span class="summary-val ${delayed5 > 0 ? 'delayed' : 'ok'}">${delayed5}</span><span class="summary-key">Delayed &gt;5d</span></div>
+          <div class="summary-metric"><span class="summary-val ${parseFloat(maxDelay) > 14 ? 'deleted' : parseFloat(maxDelay) > 0 ? 'changed' : 'ok'}">${maxDelay}</span><span class="summary-key">Max Delay</span></div>
+          <div class="summary-metric"><span class="summary-val muted">${avgVar}</span><span class="summary-key">Avg Variance</span></div>
+          <div class="summary-metric"><span class="summary-val ${critical > 0 ? 'deleted' : 'ok'}">${critical}</span><span class="summary-key">Critical</span></div>
+        </div>
       </div>
     </div>
 
@@ -248,7 +242,10 @@ function renderSchedule(el) {
     .sort((a, b) => (b.finish_variance_days || 0) - (a.finish_variance_days || 0))
     .slice(0, 20);
 
-  const tableRows = variances.map(a => `
+  const PAGE = 200;
+
+  function buildRows(items) {
+    return items.map(a => `
     <tr data-testid="activity-row" class="row-${a.change_type || 'unchanged'}${a.is_critical ? ' row-critical' : ''}">
       <td>${esc(a.task_code)}</td>
       <td>${esc(a.task_name)}</td>
@@ -262,11 +259,17 @@ function renderSchedule(el) {
       <td>${esc(a.new_status || a.old_status || '—')}</td>
       <td>${a.is_critical ? '<span class="tag-chip tag-critical">Critical</span>' : ''}</td>
     </tr>`).join('');
+  }
+
+  const initialRows = buildRows(variances.slice(0, PAGE));
+  const hasMore = variances.length > PAGE;
 
   el.innerHTML = `
     <div class="filter-row">
-      <input type="search" class="search-input" id="sched-search" placeholder="Search code or name…">
-      <select class="filter-select" id="sched-filter">
+      <label for="sched-search" class="sr-only">Search activities</label>
+      <input type="search" class="search-input" id="sched-search" placeholder="Search code or name…" aria-label="Search activities">
+      <label for="sched-filter" class="sr-only">Filter by change type</label>
+      <select class="filter-select" id="sched-filter" aria-label="Filter by change type">
         <option value="">All Changes</option>
         <option value="added">Added</option>
         <option value="deleted">Deleted</option>
@@ -291,30 +294,39 @@ function renderSchedule(el) {
           </tr>
         </thead>
         <tbody id="sched-tbody">
-          ${tableRows}
+          ${initialRows}
         </tbody>
       </table>
     </div>
+    ${hasMore ? `<div style="text-align:center;padding:16px;"><button class="btn-primary" id="sched-load-more">Load more (${variances.length - PAGE} remaining)</button></div>` : ''}
   `;
 
   // Wire up filtering
   const searchEl  = document.getElementById('sched-search');
   const filterEl  = document.getElementById('sched-filter');
-  const tbody     = document.getElementById('sched-tbody');
-  const allRows   = Array.from(tbody.querySelectorAll('tr[data-testid="activity-row"]'));
 
   function applyFilter() {
     const q   = searchEl.value.toLowerCase();
     const typ = filterEl.value;
-    allRows.forEach(row => {
+    Array.from(document.querySelectorAll('#sched-tbody tr[data-testid="activity-row"]')).forEach(row => {
       const text = row.textContent.toLowerCase();
       const matchQ   = !q   || text.includes(q);
       const matchTyp = !typ || row.classList.contains('row-' + typ);
       row.style.display = (matchQ && matchTyp) ? '' : 'none';
     });
   }
-  searchEl.addEventListener('input', applyFilter);
+  let _debTimer;
+  searchEl.addEventListener('input', () => { clearTimeout(_debTimer); _debTimer = setTimeout(applyFilter, 150); });
   filterEl.addEventListener('change', applyFilter);
+
+  // Load more
+  const loadMoreBtn = document.getElementById('sched-load-more');
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', () => {
+      document.getElementById('sched-tbody').innerHTML = buildRows(variances);
+      loadMoreBtn.parentElement.remove();
+    });
+  }
 
   // Render delay chart
   setTimeout(() => {
@@ -374,27 +386,31 @@ function renderKPIs(el) {
   ].filter(d => d.value !== 0);
 
   el.innerHTML = `
-    <h2 class="section-title">Schedule Performance KPIs</h2>
-    <div class="kpi-grid">
-      <div class="kpi-card">
-        <div class="kpi-val kpi-${floatColor}">${K.float_consumption_days != null ? fmt(K.float_consumption_days, 1) + 'd' : '—'}</div>
-        <div class="kpi-label">Float Consumption</div>
-        <div class="kpi-desc">Average float consumed since baseline</div>
+    <h2 class="section-title">Schedule Performance</h2>
+    <div class="kpi-panel">
+      <div class="kpi-row">
+        <div class="kpi-name">Float Consumption</div>
+        <div class="kpi-figure kpi-${floatColor}">${K.float_consumption_days != null ? fmt(K.float_consumption_days, 1) + 'd' : '—'}</div>
+        <div class="kpi-context">avg days consumed since baseline</div>
+        <div class="kpi-status kpi-${floatColor}">${K.float_consumption_days > 5 ? '↑ High' : K.float_consumption_days >= 1 ? '↑ Moderate' : '✓ Low'}</div>
       </div>
-      <div class="kpi-card">
-        <div class="kpi-val kpi-${pctColor}">${K.pct_complete_weighted != null ? fmt(K.pct_complete_weighted, 1) + '%' : '—'}</div>
-        <div class="kpi-label">Weighted % Complete</div>
-        <div class="kpi-desc">Duration-weighted progress</div>
+      <div class="kpi-row">
+        <div class="kpi-name">Weighted % Complete</div>
+        <div class="kpi-figure kpi-${pctColor}">${K.pct_complete_weighted != null ? fmt(K.pct_complete_weighted, 1) + '%' : '—'}</div>
+        <div class="kpi-context">duration-weighted progress across all activities</div>
+        <div class="kpi-status kpi-${pctColor}">${K.pct_complete_weighted > 60 ? '✓ On track' : K.pct_complete_weighted >= 30 ? '— Moderate' : '↓ Low'}</div>
       </div>
-      <div class="kpi-card">
-        <div class="kpi-val kpi-${spiColor}">${K.spi_duration != null ? fmt(K.spi_duration, 2) : '—'}</div>
-        <div class="kpi-label">SPI (Duration)</div>
-        <div class="kpi-desc">&ge;1.0 on schedule, &lt;0.8 critical</div>
+      <div class="kpi-row">
+        <div class="kpi-name">SPI (Duration)</div>
+        <div class="kpi-figure kpi-${spiColor}">${K.spi_duration != null ? fmt(K.spi_duration, 3) : '—'}</div>
+        <div class="kpi-context">earned duration ÷ planned duration — ≥1.0 is on schedule</div>
+        <div class="kpi-status kpi-${spiColor}">${K.spi_duration >= 1.0 ? '✓ On schedule' : K.spi_duration >= 0.8 ? '↓ Slipping' : '↓↓ Critical'}</div>
       </div>
-      <div class="kpi-card">
-        <div class="kpi-val kpi-${delayColor}">${K.schedule_delay_days != null ? fmt(K.schedule_delay_days, 0) + 'd' : '—'}</div>
-        <div class="kpi-label">Schedule Delay</div>
-        <div class="kpi-desc">Net delay vs baseline</div>
+      <div class="kpi-row">
+        <div class="kpi-name">Schedule Delay</div>
+        <div class="kpi-figure kpi-${delayColor}">${K.schedule_delay_days != null ? fmt(K.schedule_delay_days, 0) + 'd' : '—'}</div>
+        <div class="kpi-context">net delay of updated plan-end vs baseline plan-end</div>
+        <div class="kpi-status kpi-${delayColor}">${K.schedule_delay_days <= 0 ? '✓ No delay' : K.schedule_delay_days <= 14 ? '↑ Minor' : '↑↑ Significant'}</div>
       </div>
     </div>
 
@@ -864,7 +880,7 @@ function renderChat(el) {
   el.innerHTML = `
     <h2 class="section-title">AI Schedule Assistant</h2>
     <div class="chat-container">
-      <div class="chat-messages" id="chat-messages">
+      <div class="chat-messages" id="chat-messages" aria-live="polite" aria-atomic="false">
         <div class="chat-msg msg-ai">
           <strong>Assistant:</strong> I'm analyzing <em>${esc(projectName)}</em>. Ask me anything about the schedule comparison.
         </div>

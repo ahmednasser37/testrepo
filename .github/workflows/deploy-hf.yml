@@ -50,8 +50,9 @@ jobs:
             cd ..
           fi
 
-          # Sync app files (exclude venv, pycache, tests)
+          # Sync app files (exclude venv, pycache, tests, and .git)
           rsync -av --delete \
+            --exclude='.git/' \
             --exclude='.venv/' \
             --exclude='__pycache__/' \
             --exclude='*.pyc' \

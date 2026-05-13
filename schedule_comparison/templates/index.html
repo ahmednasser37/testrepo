@@ -3,134 +3,111 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P6 Schedule Comparison</title>
+  <title>P6 Compare — Upload Schedules</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-  <div class="page-wrap">
-
-    <header class="upload-header">
-      <div class="wordmark">
-        <div class="wordmark-icon">📊</div>
-        <span class="wordmark-text">P6 Compare</span>
-      </div>
-      <h1>Schedule Comparison</h1>
-      <p class="subtitle">Upload two Primavera P6 XER files to generate an instant variance report with AI analysis.</p>
-    </header>
+<body class="upload-page">
+  <div class="upload-page-inner">
+    <div class="upload-brand">
+      <span class="brand-icon">⬡</span>
+      <span class="brand-name">P6 Compare</span>
+    </div>
+    <h1 class="upload-title">Compare Two P6 Schedules</h1>
+    <p class="upload-subtitle">
+      Upload your baseline and updated XER files to instantly generate a full comparison dashboard
+      with variance analysis, milestones, lookahead, and AI insights.
+    </p>
 
     {% if error %}
-    <div class="alert alert-error" style="max-width:800px;margin:0 auto 24px;">
-      {{ error }}
-    </div>
+    <div class="error-banner" role="alert">⚠ {{ error }}</div>
     {% endif %}
 
-    <div class="card upload-card">
-      <form method="POST" action="/compare" enctype="multipart/form-data" id="upload-form">
-        <div class="upload-grid">
-
-          <div class="upload-box">
-            <label class="upload-label" for="baseline" id="baseline-label">
-              <span class="upload-badge baseline-badge">Baseline</span>
-              <div class="upload-icon-wrap">📋</div>
-              <span class="upload-title">Baseline Schedule</span>
-              <span class="upload-hint">The original approved plan</span>
-            </label>
-            <input type="file" id="baseline" name="baseline" accept=".xer" required>
-            <div class="file-name" id="baseline-name">No file selected</div>
-          </div>
-
-          <div class="upload-divider">
-            <div class="upload-divider-line"></div>
-            <div class="upload-divider-icon">→</div>
-            <div class="upload-divider-line"></div>
-          </div>
-
-          <div class="upload-box">
-            <label class="upload-label" for="updated" id="updated-label">
-              <span class="upload-badge updated-badge">Updated</span>
-              <div class="upload-icon-wrap">🔄</div>
-              <span class="upload-title">Updated Schedule</span>
-              <span class="upload-hint">The current or revised plan</span>
-            </label>
-            <input type="file" id="updated" name="updated" accept=".xer" required>
-            <div class="file-name" id="updated-name">No file selected</div>
-          </div>
-
+    <form method="POST" action="/compare" enctype="multipart/form-data" id="upload-form" novalidate>
+      <div class="drop-zones">
+        <div class="drop-zone" id="drop-baseline">
+          <div class="drop-icon">📋</div>
+          <div class="drop-zone-label">Baseline Schedule</div>
+          <div class="drop-zone-hint">Drop .XER file or click to browse</div>
+          <div class="drop-zone-filename" id="filename-baseline"></div>
+          <input type="file" name="baseline" id="input-baseline"
+                 accept=".xer" class="file-input" required aria-label="Baseline XER file">
         </div>
-
-        <div class="submit-row">
-          <button type="submit" class="btn-primary" id="submit-btn">
-            Compare Schedules
-          </button>
-          <span class="submit-hint">Typically under 10 seconds for most XER files</span>
+        <div class="drop-zones-arrow" aria-hidden="true">→</div>
+        <div class="drop-zone" id="drop-updated">
+          <div class="drop-icon">📋</div>
+          <div class="drop-zone-label">Updated Schedule</div>
+          <div class="drop-zone-hint">Drop .XER file or click to browse</div>
+          <div class="drop-zone-filename" id="filename-updated"></div>
+          <input type="file" name="updated" id="input-updated"
+                 accept=".xer" class="file-input" required aria-label="Updated XER file">
         </div>
-      </form>
-    </div>
-
-    <div class="info-grid">
-      <div class="info-card">
-        <span class="info-card-icon">🔍</span>
-        <h3>What gets compared</h3>
-        <ul>
-          <li>Activity start &amp; finish dates</li>
-          <li>Durations and remaining work</li>
-          <li>Percent complete changes</li>
-          <li>Critical path and float</li>
-          <li>Logic changes (predecessors)</li>
-          <li>Added and deleted activities</li>
-        </ul>
       </div>
-      <div class="info-card">
-        <span class="info-card-icon">📈</span>
-        <h3>Dashboard outputs</h3>
-        <ul>
-          <li>Data date comparison</li>
-          <li>Schedule health summary</li>
-          <li>AI-written narrative (optional)</li>
-          <li>Interactive variance charts</li>
-          <li>Filterable activity table</li>
-          <li>CSV &amp; JSON export</li>
-        </ul>
-      </div>
-      <div class="info-card">
-        <span class="info-card-icon">📁</span>
-        <h3>File requirements</h3>
-        <ul>
-          <li>Primavera P6 .XER format</li>
-          <li>Must contain PROJECT table</li>
-          <li>Must contain TASK table</li>
-          <li>Max 50 MB per file</li>
-          <li>UTF-8 or Latin-1 encoding</li>
-        </ul>
-      </div>
-    </div>
-
+      <div class="error-banner" id="upload-error" role="alert" style="display:none"></div>
+      <button type="submit" class="btn-compare" id="btn-compare" aria-disabled="false">
+        Compare Schedules →
+      </button>
+    </form>
   </div>
 
   <script>
-    function setupFileInput(inputId, labelId, nameId, selectedClass) {
-      const input = document.getElementById(inputId);
-      const label = document.getElementById(labelId);
-      const nameEl = document.getElementById(nameId);
-      input.addEventListener('change', function () {
-        if (this.files[0]) {
-          nameEl.textContent = this.files[0].name;
-          nameEl.classList.add('selected');
-          label.classList.add('has-file');
-        } else {
-          nameEl.textContent = 'No file selected';
-          nameEl.classList.remove('selected');
-          label.classList.remove('has-file');
-        }
-      });
-    }
-    setupFileInput('baseline', 'baseline-label', 'baseline-name');
-    setupFileInput('updated',  'updated-label',  'updated-name');
+    // File pick / drag-drop UX
+    const pairs = [
+      { drop: 'drop-baseline', input: 'input-baseline', label: 'filename-baseline' },
+      { drop: 'drop-updated',  input: 'input-updated',  label: 'filename-updated'  },
+    ];
+    const submitBtn = document.getElementById('btn-compare');
+    const picked = { baseline: false, updated: false };
 
-    document.getElementById('upload-form').addEventListener('submit', function () {
-      const btn = document.getElementById('submit-btn');
-      btn.textContent = 'Comparing…';
-      btn.disabled = true;
+    pairs.forEach(({ drop, input, label }) => {
+      const dropEl  = document.getElementById(drop);
+      const inputEl = document.getElementById(input);
+      const labelEl = document.getElementById(label);
+      const key = input.includes('baseline') ? 'baseline' : 'updated';
+
+      function markFile(name) {
+        labelEl.textContent = name;
+        dropEl.classList.add('has-file');
+        picked[key] = true;
+          submitBtn.setAttribute('aria-disabled', !(picked.baseline && picked.updated) ? 'true' : 'false');
+      }
+
+      inputEl.addEventListener('change', () => {
+        if (inputEl.files[0]) markFile(inputEl.files[0].name);
+      });
+
+      // Drag-and-drop
+      dropEl.addEventListener('dragover', e => { e.preventDefault(); dropEl.classList.add('drag-over'); });
+      dropEl.addEventListener('dragleave', () => dropEl.classList.remove('drag-over'));
+      dropEl.addEventListener('drop', e => {
+        e.preventDefault();
+        dropEl.classList.remove('drag-over');
+        const file = e.dataTransfer.files[0];
+        if (!file) return;
+        if (!file.name.toLowerCase().endsWith('.xer')) {
+          alert('Please drop a .xer file.');
+          return;
+        }
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        inputEl.files = dt.files;
+        markFile(file.name);
+      });
+    });
+
+    // Validate on submit
+    document.getElementById('upload-form').addEventListener('submit', e => {
+      const errEl = document.getElementById('upload-error');
+      if (!picked.baseline || !picked.updated) {
+        e.preventDefault();
+        errEl.textContent = 'Please upload both a baseline and an updated XER file.';
+        errEl.style.display = '';
+        return;
+      }
+      errEl.style.display = 'none';
+      submitBtn.textContent = 'Comparing… please wait';
+      submitBtn.disabled = true;
     });
   </script>
 </body>

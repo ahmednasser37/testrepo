@@ -17,13 +17,11 @@ jobs:
 
       - name: Push schedule_comparison/ to HF Space
         env:
-          _A: hf_fViwUNnXRMdFbwKr
-          _B: OZVdgdpqyeOYPbwaqn
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_SPACE: ahmednasser37/p6-compare
           HF_SPACE_NAME: p6-compare
           HF_USERNAME: ahmednasser37
         run: |
-          HF_TOKEN="${_A}${_B}"
           git config --global user.email "ci@github.com"
           git config --global user.name "GitHub Actions"
 

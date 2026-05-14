@@ -926,8 +926,11 @@ function renderMilestones(el) {
   const order = { late: 0, at_risk: 1, on_track: 2, complete: 3, unknown: 4 };
   const sorted = [...milestones].sort((a, b) => (order[a.status] || 4) - (order[b.status] || 4));
 
-  const rows = sorted.map(m => `
-    <tr data-testid="activity-row" class="row-${m.change_type || 'unchanged'}">
+  const rows = sorted.map(m => {
+    const isClickable = m.status === 'late' || m.status === 'at_risk';
+    const clickAttr = isClickable ? `class="ms-row-clickable row-${m.change_type || 'unchanged'}" onclick="traceMilestone('${esc(m.task_code)}')"` : `class="row-${m.change_type || 'unchanged'}"`;
+    return `
+    <tr data-testid="activity-row" ${clickAttr}>
       <td>${esc(m.task_code)}</td>
       <td>${esc(m.task_name)}</td>
       <td>${esc(m.wbs_name)}</td>
@@ -937,7 +940,8 @@ function renderMilestones(el) {
       <td class="num">${m.finish_variance_days != null ? fmt(m.finish_variance_days, 0) + 'd' : '—'}</td>
       <td class="num">${m.pct_complete != null ? fmt(m.pct_complete, 0) + '%' : '—'}</td>
       <td><span class="status-badge status-${m.status || 'unknown'}">${esc(m.status || 'unknown')}</span></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   el.innerHTML = `
     <h2 class="section-title">Milestones</h2>
@@ -963,6 +967,89 @@ function renderMilestones(el) {
       </table>
     </div>
   `;
+}
+
+function traceMilestone(code) {
+  const ms = (D.milestones || []).find(m => m.task_code === code);
+  if (!ms) return;
+
+  const rels = D.all_relationships || [];
+  const varMap = {};
+  (D.activity_variances || []).forEach(v => { varMap[v.task_code] = v; });
+
+  // BFS backwards from milestone to find driving predecessors
+  const chain = [];
+  const visited = new Set();
+  const queue = [{ code, depth: 0 }];
+
+  while (queue.length && chain.length < 30) {
+    const { code: cur, depth } = queue.shift();
+    if (visited.has(cur) || depth > 8) continue;
+    visited.add(cur);
+
+    if (depth > 0) {
+      const v = varMap[cur];
+      if (v) {
+        chain.push({
+          task_code:        cur,
+          task_name:        v.task_name,
+          baseline_finish:  v.baseline_finish,
+          updated_finish:   v.updated_finish,
+          delay_days:       v.finish_variance_days,
+          status:           v.new_status,
+          depth
+        });
+      }
+    }
+
+    // Find FS predecessors of cur
+    rels.forEach(r => {
+      if ((r.succ_code === cur) && (r.pred_type === 'PR_FS' || r.pred_type === 'FS')) {
+        const pv = varMap[r.pred_code];
+        if (pv && pv.finish_variance_days > 0) {
+          queue.push({ code: r.pred_code, depth: depth + 1 });
+        }
+      }
+    });
+  }
+
+  // Sort chain: highest delay first
+  chain.sort((a, b) => b.delay_days - a.delay_days);
+
+  const drawer = document.getElementById('cc-drawer');
+  const drawerTitle = document.getElementById('cc-drawer-title');
+  const drawerBody  = document.getElementById('cc-drawer-body');
+  if (!drawer) return;
+
+  drawerTitle.textContent = `Delay Trace — ${ms.task_code}: ${ms.task_name}`;
+
+  let html = `<div style="margin-bottom:1rem">
+    <p style="font-size:.875rem;color:var(--text-muted)">Late milestone: <strong>${ms.finish_variance_days > 0 ? '+' + ms.finish_variance_days : ms.finish_variance_days} days</strong></p>
+    <p style="font-size:.8125rem;color:var(--text-muted)">Driving predecessors contributing to the slip:</p>
+  </div>`;
+
+  if (!chain.length) {
+    html += '<p style="color:var(--text-muted);font-size:.875rem">No delayed predecessors found in relationship data.</p>';
+  } else {
+    html += '<div class="trace-chain">';
+    chain.forEach((item, i) => {
+      const delayColor = item.delay_days > 14 ? 'var(--deleted-accent)' : item.delay_days > 7 ? 'var(--changed-accent)' : 'var(--text-muted)';
+      html += `<div class="trace-item" style="margin-left:${item.depth * 12}px">
+        <div class="trace-item-header">
+          <span class="gantt-code">${esc(item.task_code)}</span>
+          <span style="color:${delayColor};font-weight:600;margin-left:.5rem">+${item.delay_days}d</span>
+        </div>
+        <div style="font-size:.8125rem;color:var(--text-primary);margin:.125rem 0">${esc(item.task_name)}</div>
+        <div style="font-size:.75rem;color:var(--text-muted)">${item.baseline_finish} → ${item.updated_finish}</div>
+      </div>`;
+      if (i < chain.length - 1) html += '<div class="trace-connector">↑</div>';
+    });
+    html += '</div>';
+  }
+
+  drawerBody.innerHTML = html;
+  drawer.classList.add('open');
+  document.getElementById('cc-drawer-overlay')?.classList.add('open');
 }
 
 /* ── Tab 6: Procurement ──────────────────────────────────────────────────── */
@@ -1203,12 +1290,59 @@ function renderEV(el) {
         <div id="evm-interval-chart" style="min-height:260px"></div>
       </div>
 
+      <!-- Monthly Variance Table -->
+      <div class="evm-section-card" id="evm-variance-table-wrap" style="margin-top:1rem">
+        <div class="evm-section-header">
+          <span class="evm-section-title">MONTHLY VARIANCE DETAIL</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="tbl" id="evm-monthly-tbl">
+            <thead>
+              <tr>
+                <th>Month</th>
+                <th>Planned (PV)</th>
+                <th>Earned (EV)</th>
+                <th>Variance (SV)</th>
+                <th>SPI</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="evm-monthly-body"></tbody>
+          </table>
+        </div>
+      </div>
+
       ${!hasCost ? `
       <div class="evm-no-cost-notice">
         <strong>No cost data detected</strong> — showing duration-based metrics. Add cost-loaded resources to your XER file for full EVM analysis.
       </div>` : ''}
     </div>
   `;
+
+  // Monthly variance table
+  const scurveU = (D.scurve && D.scurve.updated) || [];
+  const monthlyBody = document.getElementById('evm-monthly-body');
+  if (monthlyBody && scurveU.length) {
+    let prevPvCum = 0, prevEvCum = 0;
+    monthlyBody.innerHTML = scurveU.map(row => {
+      const pvM = (row.planned_cum_cost || 0) - prevPvCum;
+      const evM = (row.actual_cum_cost  || 0) - prevEvCum;
+      prevPvCum = row.planned_cum_cost || 0;
+      prevEvCum = row.actual_cum_cost  || 0;
+      const sv  = evM - pvM;
+      const spi = pvM > 0 ? (evM / pvM) : null;
+      const cls = sv < -1000 ? 'badge-red' : sv > 1000 ? 'badge-green' : 'badge-gray';
+      const spiCls = spi === null ? '' : spi >= 1.0 ? 'style="color:var(--added-accent)"' : 'style="color:var(--deleted-accent)"';
+      return `<tr>
+        <td>${row.period_date ? row.period_date.slice(0,7) : ''}</td>
+        <td>${fmtCost(pvM)}</td>
+        <td>${fmtCost(evM)}</td>
+        <td><span class="badge ${cls}">${sv>=0?'+':''}${fmtCost(sv)}</span></td>
+        <td ${spiCls}>${spi !== null ? spi.toFixed(3) : '—'}</td>
+        <td>${sv < -1000 ? '<span class="badge badge-red">Behind</span>' : sv > 1000 ? '<span class="badge badge-green">Ahead</span>' : '<span class="badge badge-gray">On Track</span>'}</td>
+      </tr>`;
+    }).join('');
+  }
 
   // ── Wire toggle buttons ───────────────────────────────────────────────────
   let currentView = 'cumulative';
@@ -1328,110 +1462,99 @@ function renderResources(el) {
   const RL = D.resource_loading || {};
   const manpower  = RL.manpower  || [];
   const equipment = RL.equipment || [];
-
-  const manPeak = RL.manpower_peak  || 0;
-  const manAvg  = RL.manpower_avg   || 0;
-  const eqPeak  = RL.equipment_peak || 0;
-  const eqAvg   = RL.equipment_avg  || 0;
+  const manPeak   = RL.manpower_peak  || 0;
+  const manAvg    = RL.manpower_avg   || 0;
+  const eqPeak    = RL.equipment_peak || 0;
+  const eqAvg     = RL.equipment_avg  || 0;
 
   el.innerHTML = `
     <div class="res-page">
-      <!-- Summary row -->
-      <div class="res-summary-row">
-        <div class="res-summary-chip"><span class="res-chip-label">CUM PV%</span><span class="res-chip-val">${D.kpis?.cum_pv_pct != null ? D.kpis.cum_pv_pct + '%' : '—'}</span></div>
-        <div class="res-summary-chip"><span class="res-chip-label">CUM EV%</span><span class="res-chip-val">${D.kpis?.cum_ev_pct != null ? D.kpis.cum_ev_pct + '%' : '—'}</span></div>
-        <div class="res-summary-chip res-chip-sv ${(D.kpis?.sv_pct || 0) >= 0 ? 'pos' : 'neg'}"><span class="res-chip-label">SV%</span><span class="res-chip-val">${D.kpis?.sv_pct != null ? (D.kpis.sv_pct > 0 ? '+' : '') + fmt(D.kpis.sv_pct,1) + '%' : '—'}</span></div>
-      </div>
-
-      <!-- Manpower + Equipment side by side -->
-      <div class="res-charts-grid">
-        <!-- Manpower -->
-        <div class="res-chart-card">
-          <div class="res-chart-header">
-            <div>
-              <div class="res-chart-title">MANPOWER LOADING</div>
-              <div class="res-chart-sub">Workers required per period</div>
-            </div>
-            <div class="res-chart-stats">
-              <div class="res-stat"><span class="res-stat-label">PEAK</span><span class="res-stat-val res-stat-peak">${manPeak.toLocaleString()}</span></div>
-              <div class="res-stat"><span class="res-stat-label">AVG</span><span class="res-stat-val">${manAvg.toLocaleString()}</span></div>
-            </div>
-          </div>
-          <div class="res-legend">
-            <span class="res-legend-dot res-legend-peak"></span>Peak Load
-            <span class="res-legend-dot res-legend-above" style="margin-left:.75rem"></span>Above Avg
-            <span class="res-legend-dot res-legend-below" style="margin-left:.75rem"></span>Below Avg
-          </div>
-          <div id="res-manpower-chart" style="height:240px"></div>
-        </div>
-
-        <!-- Equipment -->
-        <div class="res-chart-card">
-          <div class="res-chart-header">
-            <div>
-              <div class="res-chart-title">EQUIPMENT LOADING</div>
-              <div class="res-chart-sub">Equipment units required per period</div>
-            </div>
-            <div class="res-chart-stats">
-              <div class="res-stat"><span class="res-stat-label">PEAK</span><span class="res-stat-val res-stat-peak-eq">${eqPeak.toLocaleString()}</span></div>
-              <div class="res-stat"><span class="res-stat-label">AVG</span><span class="res-stat-val">${eqAvg.toLocaleString()}</span></div>
-            </div>
-          </div>
-          <div class="res-legend">
-            <span class="res-legend-dot res-legend-peak-eq"></span>Peak Load
-            <span class="res-legend-dot res-legend-above-eq" style="margin-left:.75rem"></span>Above Avg
-            <span class="res-legend-dot res-legend-below-eq" style="margin-left:.75rem"></span>Below Avg
-          </div>
-          <div id="res-equipment-chart" style="height:240px"></div>
+      <div class="res-header-row">
+        <h2 class="section-title" style="margin:0">RESOURCE LOADING HISTOGRAM</h2>
+        <div class="res-type-selector">
+          <button class="res-type-btn active" data-type="manpower" onclick="resSelectType(this,'manpower')">Labor</button>
+          <button class="res-type-btn" data-type="equipment" onclick="resSelectType(this,'equipment')">Equipment</button>
         </div>
       </div>
 
-      ${manpower.length === 0 && equipment.length === 0 ? `
-      <div class="info-card" style="margin-top:1.5rem">
-        <strong>No resource data found</strong>
-        <p>Resource loading requires cost-loaded activities with TASKRSRC assignments in the XER file.</p>
-      </div>` : ''}
-    </div>
-  `;
+      <div class="res-summary-row" id="res-summary-row">
+        <div class="res-summary-chip"><span class="res-chip-label">PEAK</span><span class="res-chip-val">${manPeak.toLocaleString()}</span></div>
+        <div class="res-summary-chip"><span class="res-chip-label">AVG</span><span class="res-chip-val">${manAvg.toLocaleString()}</span></div>
+        <div class="res-summary-chip"><span class="res-chip-label">PERIODS</span><span class="res-chip-val">${manpower.length}</span></div>
+      </div>
 
-  function renderResourceBar(containerId, items, colorPeak, colorAbove, colorBelow, avgLine) {
-    const container = document.getElementById(containerId);
-    if (!container || !items.length) return;
+      <div class="res-chart-card" id="res-chart-main">
+        <div class="res-chart-header">
+          <span class="res-chart-title" id="res-chart-title">LABOR HISTOGRAM</span>
+          <div class="res-legend">
+            <span class="res-legend-dot res-legend-peak"></span> Peak
+            <span class="res-legend-dot res-legend-above" style="margin-left:.5rem"></span> Above Avg
+            <span class="res-legend-dot res-legend-below" style="margin-left:.5rem"></span> Below Avg
+            <span class="res-legend-dot" style="background:var(--border);margin-left:.5rem"></span> Avg Line
+          </div>
+        </div>
+        <div id="res-chart-container" style="height:320px"></div>
+      </div>
+    </div>`;
 
-    // Color each bar
-    const data = items.map(d => ({
-      period: d.period,
-      value:  d.qty,
-      color:  d.is_peak ? colorPeak : d.above_avg ? colorAbove : colorBelow,
-    }));
+  // Store data for type switching
+  window._resData = { manpower, equipment, manPeak, manAvg, eqPeak, eqAvg };
 
-    container.style.height = '240px';
-    const chart = new G2.Chart({ container, autoFit: true, height: 240 });
-    chart.options({
-      type: 'interval',
-      data,
-      encode: { x: 'period', y: 'value', color: 'color' },
-      scale:  { color: { type: 'identity' } },
-      style:  { radius: [3, 3, 0, 0] },
-      axis: {
-        y: { title: false, gridLineDash: [4,4] },
-        x: { title: false, label: { autoRotate: true, autoHide: true } },
-      },
-      annotations: avgLine > 0 ? [{
-        type:  'lineY',
-        data:  [avgLine],
-        style: { stroke: '#f59e0b', strokeWidth: 2, lineDash: [6,3] },
-        label: { text: `Avg ${avgLine.toLocaleString()}`, position: 'right', style: { fill: '#f59e0b', fontSize: 11 } },
-      }] : [],
-      interaction: { tooltip: { shared: true } },
-    });
-    chart.render();
+  setTimeout(() => renderResChart('manpower'), 0);
+
+  window.resSelectType = function(btn, type) {
+    document.querySelectorAll('.res-type-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderResChart(type);
+    // Update summary
+    const rd = window._resData;
+    const isMan = type === 'manpower';
+    const peak = isMan ? rd.manPeak : rd.eqPeak;
+    const avg  = isMan ? rd.manAvg  : rd.eqAvg;
+    const data = isMan ? rd.manpower : rd.equipment;
+    document.getElementById('res-summary-row').innerHTML = `
+      <div class="res-summary-chip"><span class="res-chip-label">PEAK</span><span class="res-chip-val">${peak.toLocaleString()}</span></div>
+      <div class="res-summary-chip"><span class="res-chip-label">AVG</span><span class="res-chip-val">${avg.toLocaleString()}</span></div>
+      <div class="res-summary-chip"><span class="res-chip-label">PERIODS</span><span class="res-chip-val">${data.length}</span></div>`;
+    document.getElementById('res-chart-title').textContent = (isMan ? 'LABOR' : 'EQUIPMENT') + ' HISTOGRAM';
+  };
+}
+
+function renderResChart(type) {
+  const rd = window._resData || {};
+  const data  = (type === 'manpower' ? rd.manpower : rd.equipment) || [];
+  const peak  = type === 'manpower' ? rd.manPeak : rd.eqPeak;
+  const avg   = type === 'manpower' ? rd.manAvg  : rd.eqAvg;
+
+  const container = document.getElementById('res-chart-container');
+  if (!container || !data.length) {
+    if (container) container.innerHTML = '<p style="padding:1rem;color:var(--text-muted)">No resource data.</p>';
+    return;
   }
+  container.innerHTML = '';
 
-  setTimeout(() => {
-    if (manpower.length) renderResourceBar('res-manpower-chart', manpower, '#1e40af', '#3b82f6', '#93c5fd', manAvg);
-    if (equipment.length) renderResourceBar('res-equipment-chart', equipment, '#92400e', '#d97706', '#fcd34d', eqAvg);
-  }, 0);
+  const chart = new G2.Chart({ container: 'res-chart-container', autoFit: true, height: 320 });
+  chart.options({
+    type: 'view',
+    data: data.map(d => ({ period: d.period, qty: d.qty, cat: d.is_peak ? 'Peak' : d.above_avg ? 'Above Avg' : 'Normal' })),
+    children: [
+      {
+        type: 'interval',
+        encode: { x: 'period', y: 'qty', color: 'cat' },
+        scale: { color: { domain: ['Peak','Above Avg','Normal'], range: ['#dc2626','#d97706','#94a3b8'] } },
+        style: { radius: [2,2,0,0] },
+        axis: { x: { labelAutoRotate: true, labelFontSize: 10 }, y: { grid: true } },
+      },
+      {
+        type: 'line',
+        data: data.map(d => ({ period: d.period, avg })),
+        encode: { x: 'period', y: 'avg' },
+        style: { stroke: '#0f172a', strokeDasharray: '4,3', lineWidth: 1.5 },
+      }
+    ],
+    legend: { color: { position: 'top-right', size: 10 } },
+  });
+  chart.render();
 }
 
 /* ── Tab: Gantt Chart ─────────────────────────────────────────────────────── */

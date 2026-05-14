@@ -23,6 +23,15 @@ function fmt(val, decimals = 1) {
   return n.toFixed(decimals);
 }
 
+function fmtCost(v) {
+  if (!v && v !== 0) return '—';
+  const abs = Math.abs(v);
+  const sign = v < 0 ? '-' : '';
+  if (abs >= 1e6) return sign + (abs/1e6).toFixed(2) + 'M';
+  if (abs >= 1e3) return sign + (abs/1e3).toFixed(1) + 'K';
+  return sign + abs.toFixed(0);
+}
+
 function fmtDate(iso) {
   if (!iso) return '—';
   try { return iso.slice(0, 10); } catch (e) { return iso; }
@@ -960,85 +969,98 @@ function renderMilestones(el) {
 
 function renderProcurement(el) {
   const P = D.procurement || {};
-  const items = P.items || [];
+  const items  = P.items  || [];
+  const summary = P.summary || {};
   const detected = P.detected_wbs_nodes || [];
-  const summary  = P.summary || {};
 
-  if (detected.length === 0) {
-    el.innerHTML = `
-      <h2 class="section-title">Procurement</h2>
-      <div class="info-card">
-        <strong>No procurement WBS nodes detected</strong>
-        <p>No WBS nodes matching typical procurement patterns were found in the schedules.</p>
-      </div>`;
+  el.innerHTML = `<h2 class="section-title">PROCUREMENT & LONG-LEAD ITEMS</h2>`;
+
+  if (!items.length) {
+    el.innerHTML += `<div class="info-card"><p>No procurement items detected.</p>${detected.length ? '<p style="color:var(--text-muted);font-size:.8125rem">Detected WBS: ' + detected.join(', ') + '</p>' : ''}</div>`;
     return;
   }
 
-  const wbsChips = detected.map(n => `<span class="tag-chip">${esc(n)}</span>`).join('');
+  // Summary chips
+  el.innerHTML += `<div class="proc-summary-row">
+    <div class="proc-chip"><span class="proc-chip-lbl">TOTAL</span><span class="proc-chip-val">${summary.total||0}</span></div>
+    <div class="proc-chip proc-chip--green"><span class="proc-chip-lbl">COMPLETE</span><span class="proc-chip-val">${summary.complete||0}</span></div>
+    <div class="proc-chip proc-chip--blue"><span class="proc-chip-lbl">IN PROGRESS</span><span class="proc-chip-val">${summary.in_progress||0}</span></div>
+    <div class="proc-chip proc-chip--amber"><span class="proc-chip-lbl">NOT STARTED</span><span class="proc-chip-val">${summary.not_started||0}</span></div>
+    <div class="proc-chip proc-chip--red"><span class="proc-chip-lbl">LATE</span><span class="proc-chip-val">${summary.late||0}</span></div>
+  </div>`;
 
-  const rows = items.map(item => {
-    const typeTag = item.is_long_lead
-      ? '<span class="tag-chip tag-long-lead">Long Lead</span>'
-      : item.is_short_lead
-        ? '<span class="tag-chip tag-short-lead">Short Lead</span>'
-        : '—';
-    return `
-    <tr data-testid="activity-row">
-      <td>${esc(item.task_code)}</td>
-      <td>${esc(item.task_name)}</td>
-      <td>${esc(item.wbs_name)}</td>
-      <td>${fmtDate(item.baseline_finish)}</td>
-      <td>${fmtDate(item.updated_finish)}</td>
-      <td class="num">${item.finish_variance_days != null ? fmt(item.finish_variance_days, 0) + 'd' : '—'}</td>
-      <td class="num">${item.pct_complete != null ? fmt(item.pct_complete, 0) + '%' : '—'}</td>
-      <td><span class="status-badge status-${item.status || 'unknown'}">${esc(item.status || '—')}</span></td>
-      <td>${typeTag}</td>
-    </tr>`;
-  }).join('');
+  // Group items by WBS
+  const wbsGroups = {};
+  const wbsOrder = [];
+  items.forEach(it => {
+    const w = it.wbs_name || 'Uncategorized';
+    if (!wbsGroups[w]) { wbsGroups[w] = []; wbsOrder.push(w); }
+    wbsGroups[w].push(it);
+  });
 
-  el.innerHTML = `
-    <h2 class="section-title">Procurement</h2>
-    <div class="chips-row" style="margin-bottom:12px;">
-      <strong>Detected WBS Nodes:</strong> ${wbsChips}
-    </div>
-    <div class="stats-grid" style="margin-bottom:24px;">
-      <div class="stat-card">
-        <div class="stat-num stat-num-blue">${summary.total || 0}</div>
-        <div class="stat-label">Total</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-num-green">${summary.complete || 0}</div>
-        <div class="stat-label">Complete</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-num-orange">${summary.in_progress || 0}</div>
-        <div class="stat-label">In Progress</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-num-muted">${summary.not_started || 0}</div>
-        <div class="stat-label">Not Started</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-num stat-num-red">${summary.late || 0}</div>
-        <div class="stat-label">Late</div>
-      </div>
-    </div>
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Code</th><th>Name</th><th>WBS</th>
-            <th>Baseline Finish</th><th>Updated Finish</th>
-            <th class="num">Variance</th><th class="num">%</th>
-            <th>Status</th><th>Type</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.length ? rows : '<tr><td colspan="9" class="no-data">No procurement items found</td></tr>'}
-        </tbody>
-      </table>
-    </div>
-  `;
+  const procCollapsed = new Set();
+
+  function statusBadge(s) {
+    const m = { 'Complete':'badge-green','In Progress':'badge-blue','Late':'badge-red','Not Started':'badge-gray' };
+    return `<span class="badge ${m[s]||'badge-gray'}">${s}</span>`;
+  }
+  function varBadge(v) {
+    if (!v && v !== 0) return '';
+    const cls = v > 0 ? 'badge-red' : v < 0 ? 'badge-green' : 'badge-gray';
+    return `<span class="badge ${cls}">${v > 0 ? '+' : ''}${v}d</span>`;
+  }
+
+  function buildProcTable() {
+    let html = `<div class="proc-table-wrap"><table class="tbl proc-tbl">
+      <thead><tr>
+        <th>Activity</th><th>WBS</th>
+        <th>Baseline Finish</th><th>Updated Finish</th><th>Variance</th>
+        <th>% Complete</th><th>Status</th>
+      </tr></thead><tbody>`;
+
+    wbsOrder.forEach(wbs => {
+      const acts = wbsGroups[wbs];
+      const isCol = procCollapsed.has(wbs);
+      html += `<tr class="proc-wbs-header" onclick="procToggleWbs('${encodeURIComponent(wbs)}')">
+        <td colspan="7">
+          <span class="proc-collapse-icon">${isCol ? '▶' : '▼'}</span>
+          <strong>${esc(wbs)}</strong>
+          <span class="proc-wbs-count">${acts.length} item${acts.length>1?'s':''}</span>
+        </td>
+      </tr>`;
+      if (!isCol) {
+        acts.forEach(it => {
+          html += `<tr class="proc-item-row">
+            <td><span class="gantt-code">${esc(it.task_code)}</span> ${esc(it.task_name)}</td>
+            <td style="color:var(--text-muted);font-size:.75rem">${esc(it.wbs_name)}</td>
+            <td>${it.baseline_finish||'—'}</td>
+            <td>${it.updated_finish||'—'}</td>
+            <td>${varBadge(it.finish_variance_days)}</td>
+            <td>
+              <div class="proc-prog-bar"><div class="proc-prog-fill" style="width:${it.pct_complete||0}%"></div></div>
+              <span style="font-size:.75rem;color:var(--text-muted)">${it.pct_complete||0}%</span>
+            </td>
+            <td>${statusBadge(it.status)}</td>
+          </tr>`;
+        });
+      }
+    });
+
+    html += '</tbody></table></div>';
+    return html;
+  }
+
+  const tableContainer = document.createElement('div');
+  tableContainer.id = 'proc-table-container';
+  tableContainer.innerHTML = buildProcTable();
+  el.appendChild(tableContainer);
+
+  window.procToggleWbs = function(wbsKey) {
+    const wbs = decodeURIComponent(wbsKey);
+    if (procCollapsed.has(wbs)) procCollapsed.delete(wbs);
+    else procCollapsed.add(wbs);
+    document.getElementById('proc-table-container').innerHTML = buildProcTable();
+  };
 }
 
 /* ── Tab 7: Earned Value (EVM Performance Dashboard) ────────────────────── */
@@ -1416,11 +1438,10 @@ function renderResources(el) {
 
 function renderGantt(el) {
   const activities = D.gantt || [];
+  const allRels = D.all_relationships || [];
 
   if (!activities.length) {
-    el.innerHTML = `
-      <h2 class="section-title">Project Timeline — Gantt Chart</h2>
-      <div class="info-card"><p>No activity data available for Gantt chart.</p></div>`;
+    el.innerHTML = '<div class="info-card"><p>No activity data available for Gantt chart.</p></div>';
     return;
   }
 
@@ -1437,27 +1458,16 @@ function renderGantt(el) {
     return;
   }
 
-  const totalMs    = maxDate - minDate;
-  const totalWeeks = Math.ceil(totalMs / (7 * 24 * 3600 * 1000));
-  const dataDate   = D.project?.updated_data_date ? new Date(D.project.updated_data_date) : null;
-
-  // Group by WBS
-  const wbsGroups = {};
-  activities.forEach(a => {
-    const w = a.wbs_name || 'Unassigned';
-    if (!wbsGroups[w]) wbsGroups[w] = [];
-    wbsGroups[w].push(a);
-  });
+  const totalMs  = maxDate - minDate;
+  const dataDate = D.project?.updated_data_date ? new Date(D.project.updated_data_date) : null;
 
   function pct(dateStr) {
     if (!dateStr) return 0;
-    const d = new Date(dateStr);
-    return Math.max(0, Math.min(100, (d - minDate) / totalMs * 100));
+    return Math.max(0, Math.min(100, (new Date(dateStr) - minDate) / totalMs * 100));
   }
-  function widthPct(startStr, finishStr) {
-    if (!startStr || !finishStr) return 0;
-    const s = new Date(startStr), f = new Date(finishStr);
-    return Math.max(0.5, (f - s) / totalMs * 100);
+  function widthPct(s, f) {
+    if (!s || !f) return 0;
+    return Math.max(0.3, (new Date(f) - new Date(s)) / totalMs * 100);
   }
   function barClass(a) {
     if (a.is_critical) return 'gantt-bar--critical';
@@ -1466,44 +1476,84 @@ function renderGantt(el) {
     return 'gantt-bar--notstarted';
   }
 
-  // Build month header ticks
+  // Group by WBS
+  const wbsOrder = [];
+  const wbsGroups = {};
+  activities.forEach(a => {
+    const w = a.wbs_name || 'Unassigned';
+    if (!wbsGroups[w]) { wbsGroups[w] = []; wbsOrder.push(w); }
+    wbsGroups[w].push(a);
+  });
+
+  // Collapsed state
+  const collapsed = new Set();
+
+  // Month ticks
   const ticks = [];
   const cur = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
   while (cur <= maxDate) {
     ticks.push({ label: cur.toLocaleDateString(undefined, {month:'short', year:'2-digit'}), pct: (cur - minDate) / totalMs * 100 });
     cur.setMonth(cur.getMonth() + 1);
   }
+  const todayPct = dataDate ? (dataDate - minDate) / totalMs * 100 : null;
 
-  // Today marker
-  const todayPct = dataDate ? ((dataDate - minDate) / totalMs * 100) : null;
+  // Build code → row-index map for SVG line drawing
+  const rowIndex = {};  // task_code → {left, centerY}
 
-  let rowsHtml = '';
-  Object.entries(wbsGroups).forEach(([wbs, acts]) => {
-    rowsHtml += `<div class="gantt-wbs-row"><div class="gantt-task-cell gantt-wbs-cell" title="${esc(wbs)}">${esc(wbs)}</div><div class="gantt-bar-cell"></div></div>`;
-    acts.forEach(a => {
-      const leftPct  = pct(a.planned_start);
-      const wPct     = widthPct(a.planned_start, a.planned_finish);
-      const cls      = barClass(a);
-      const progW    = Math.max(0, Math.min(wPct, a.phys_complete_pct / 100 * wPct));
-      rowsHtml += `
-        <div class="gantt-activity-row" title="${esc(a.task_code + ' — ' + a.task_name)}">
-          <div class="gantt-task-cell">
-            <span class="gantt-code">${esc(a.task_code)}</span>
-            <span class="gantt-name">${esc(a.task_name)}</span>
-          </div>
-          <div class="gantt-bar-cell">
-            <div class="gantt-bar ${cls}" style="left:${leftPct.toFixed(2)}%;width:${wPct.toFixed(2)}%">
-              <div class="gantt-bar-progress" style="width:${progW.toFixed(1)}%"></div>
+  // Build activity code set for quick lookup
+  const actCodeSet = new Set(activities.map(a => a.task_code));
+
+  // Filter relationships to only those where both ends are visible activities
+  const criticalRels = allRels.filter(r =>
+    actCodeSet.has(r.pred_code) && actCodeSet.has(r.succ_code) &&
+    (r.pred_type === 'PR_FS' || r.pred_type === 'FS')
+  ).slice(0, 300);  // cap at 300 lines for performance
+
+  function buildRows() {
+    let html = '';
+    let rowIdx = 0;
+    wbsOrder.forEach(wbs => {
+      const acts = wbsGroups[wbs];
+      const isCollapsed = collapsed.has(wbs);
+      const wbsKey = encodeURIComponent(wbs);
+      html += `<div class="gantt-wbs-row" data-wbs="${wbsKey}">
+        <div class="gantt-task-cell gantt-wbs-cell">
+          <button class="gantt-collapse-btn" onclick="ganttToggleWbs(this,'${wbsKey}')">${isCollapsed ? '▶' : '▼'}</button>
+          <span title="${esc(wbs)}">${esc(wbs)}</span>
+        </div>
+        <div class="gantt-bar-cell"></div>
+      </div>`;
+      if (!isCollapsed) {
+        acts.forEach(a => {
+          const leftP  = pct(a.planned_start);
+          const wP     = widthPct(a.planned_start, a.planned_finish);
+          const progW  = Math.max(0, Math.min(wP, a.phys_complete_pct / 100 * wP));
+          const cls    = barClass(a);
+          const rowId  = 'gr-' + a.task_code.replace(/[^a-zA-Z0-9]/g,'_');
+          rowIndex[a.task_code] = { leftPct: leftP, widthPct: wP, rowId };
+          html += `
+          <div class="gantt-activity-row" id="${rowId}" data-wbs="${wbsKey}" title="${esc(a.task_code + ' — ' + a.task_name)}">
+            <div class="gantt-task-cell">
+              <span class="gantt-code">${esc(a.task_code)}</span>
+              <span class="gantt-name">${esc(a.task_name)}</span>
             </div>
-          </div>
-        </div>`;
+            <div class="gantt-bar-cell">
+              <div class="gantt-bar ${cls}" style="left:${leftP.toFixed(2)}%;width:${wP.toFixed(2)}%">
+                <div class="gantt-bar-progress" style="width:${progW.toFixed(1)}%"></div>
+                ${a.phys_complete_pct > 0 && a.phys_complete_pct < 100 ? `<span class="gantt-pct-label">${a.phys_complete_pct}%</span>` : ''}
+              </div>
+            </div>
+          </div>`;
+          rowIdx++;
+        });
+      }
     });
-  });
+    return html;
+  }
 
   const ticksHtml = ticks.map(t =>
     `<div class="gantt-tick" style="left:${t.pct.toFixed(2)}%">${esc(t.label)}</div>`
   ).join('');
-
   const todayHtml = todayPct != null
     ? `<div class="gantt-today-line" style="left:${todayPct.toFixed(2)}%"><span class="gantt-today-label">TODAY</span></div>`
     : '';
@@ -1512,7 +1562,7 @@ function renderGantt(el) {
     <div class="gantt-page">
       <div class="gantt-header-row">
         <h2 class="section-title" style="margin:0">PROJECT TIMELINE — GANTT CHART</h2>
-        <div class="gantt-meta">${activities.length} Activities · ${totalWeeks} Weeks</div>
+        <div class="gantt-meta">${activities.length} Activities</div>
         <div class="gantt-legend">
           <span class="gantt-legend-item"><span class="gantt-legend-dot gantt-legend-dot--notstarted"></span>Not Started</span>
           <span class="gantt-legend-item"><span class="gantt-legend-dot gantt-legend-dot--inprogress"></span>In Progress</span>
@@ -1520,24 +1570,90 @@ function renderGantt(el) {
           <span class="gantt-legend-item"><span class="gantt-legend-dot gantt-legend-dot--critical"></span>Critical</span>
         </div>
       </div>
-
-      <!-- Two-panel Gantt -->
       <div class="gantt-container">
-        <!-- Header row -->
         <div class="gantt-header">
           <div class="gantt-task-header">WBS / ACTIVITY</div>
-          <div class="gantt-timeline-header">
+          <div class="gantt-timeline-header" id="gantt-timeline-hdr">
             ${ticksHtml}
             ${todayHtml}
           </div>
         </div>
-        <!-- Rows -->
-        <div class="gantt-rows" id="gantt-rows">
-          ${rowsHtml}
-        </div>
+        <div class="gantt-rows" id="gantt-rows">${buildRows()}</div>
       </div>
-    </div>
-  `;
+    </div>`;
+
+  // Draw SVG relationship lines after DOM is settled
+  requestAnimationFrame(() => drawGanttLines(criticalRels));
+
+  // Expose toggle function
+  window.ganttToggleWbs = function(btn, wbsKey) {
+    const wbs = decodeURIComponent(wbsKey);
+    if (collapsed.has(wbs)) { collapsed.delete(wbs); btn.textContent = '▼'; }
+    else { collapsed.add(wbs); btn.textContent = '▶'; }
+    document.getElementById('gantt-rows').innerHTML = buildRows();
+    requestAnimationFrame(() => drawGanttLines(criticalRels));
+  };
+}
+
+function drawGanttLines(rels) {
+  const container = document.getElementById('gantt-rows');
+  if (!container || !rels.length) return;
+
+  // Remove previous SVG overlay
+  const existing = document.getElementById('gantt-svg-overlay');
+  if (existing) existing.remove();
+
+  const containerRect = container.getBoundingClientRect();
+  if (!containerRect.width) return;
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.id = 'gantt-svg-overlay';
+  svg.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:visible;';
+  container.style.position = 'relative';
+  container.appendChild(svg);
+
+  rels.forEach(rel => {
+    const predId = 'gr-' + rel.pred_code.replace(/[^a-zA-Z0-9]/g,'_');
+    const succId = 'gr-' + rel.succ_code.replace(/[^a-zA-Z0-9]/g,'_');
+    const predEl = document.getElementById(predId);
+    const succEl = document.getElementById(succId);
+    if (!predEl || !succEl) return;
+
+    const pRect = predEl.getBoundingClientRect();
+    const sRect = succEl.getBoundingClientRect();
+
+    // Find the bar cells (second child)
+    const pBar = predEl.querySelector('.gantt-bar');
+    const sBar = succEl.querySelector('.gantt-bar');
+    if (!pBar || !sBar) return;
+
+    const pBarRect = pBar.getBoundingClientRect();
+    const sBarRect = sBar.getBoundingClientRect();
+
+    // Start: right edge of pred bar; End: left edge of succ bar
+    const x1 = pBarRect.right  - containerRect.left;
+    const y1 = pRect.top + pRect.height / 2 - containerRect.top;
+    const x2 = sBarRect.left   - containerRect.left;
+    const y2 = sRect.top + sRect.height / 2 - containerRect.top;
+
+    if (x1 < 0 || x2 < 0) return;
+
+    // Elbow connector: right → down/up → right
+    const mx = x1 + Math.max(6, (x2 - x1) * 0.4);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', `M ${x1} ${y1} L ${mx} ${y1} L ${mx} ${y2} L ${x2} ${y2}`);
+    path.setAttribute('stroke', '#94a3b8');
+    path.setAttribute('stroke-width', '1');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke-dasharray', '3,2');
+    svg.appendChild(path);
+
+    // Arrowhead
+    const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    arrow.setAttribute('points', `${x2},${y2} ${x2-5},${y2-3} ${x2-5},${y2+3}`);
+    arrow.setAttribute('fill', '#94a3b8');
+    svg.appendChild(arrow);
+  });
 }
 
 /* ── Tab 8: WBS ──────────────────────────────────────────────────────────── */

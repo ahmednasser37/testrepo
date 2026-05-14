@@ -23,6 +23,8 @@ from lookahead_engine import compute_lookahead
 from kpi_engine import compute_kpis
 from milestone_engine import compare_milestones
 from procurement_engine import compute_procurement
+from oos_engine import detect_oos
+from path_engine import compute_longest_path
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SCE_SECRET_KEY", "dev-secret-change-in-production")
@@ -116,6 +118,34 @@ def _build_full_data(
     milestones  = compare_milestones(baseline_tables, updated_tables, data_date)
     procurement = compute_procurement(baseline_tables, updated_tables, data_date)
 
+    # OOS detection
+    oos = detect_oos(updated_tables, data_date)
+
+    # Longest path / bottleneck
+    bottleneck = compute_longest_path(updated_tables, data_date)
+
+    # Full relationships list (all updated relationships for milestone trace + gantt lines)
+    from xer_parser import get_relationships as _get_rels
+    _rels_df = _get_rels(updated_tables)
+    # Map task_id → task_code using TASK table
+    _task_raw = updated_tables.get("TASK", pd.DataFrame())
+    if not _rels_df.empty and not _task_raw.empty and "task_id" in _task_raw.columns:
+        _id2code = dict(zip(_task_raw["task_id"].astype(str), _task_raw["task_code"].astype(str)))
+        _rels_df = _rels_df.copy()
+        if "pred_task_id" in _rels_df.columns:
+            _rels_df["pred_code"] = _rels_df["pred_task_id"].astype(str).map(_id2code).fillna("")
+        if "task_id" in _rels_df.columns:
+            _rels_df["succ_code"] = _rels_df["task_id"].astype(str).map(_id2code).fillna("")
+    all_relationships = []
+    if not _rels_df.empty:
+        for _, _r in _rels_df.iterrows():
+            all_relationships.append({
+                "pred_code": str(_r.get("pred_code", _r.get("pred_task_id", ""))),
+                "succ_code": str(_r.get("succ_code", _r.get("task_id", ""))),
+                "pred_type": str(_r.get("pred_type", "")),
+                "lag_days":  round(float(_r.get("lag_hr_cnt", 0) or 0) / 8.0, 1),
+            })
+
     # Resource loading (manpower + equipment per period)
     resource_loading = updated_dm.get("resource_loading", {})
 
@@ -133,6 +163,11 @@ def _build_full_data(
                 _float_map[_tid]    = float(_t.get("total_float_hr_cnt", 0) or 0) / 8.0
                 _critical_map[_tid] = str(_t.get("driving_path_flag", "")) == "Y"
 
+        _task_type_map: dict[str, str] = {}
+        if _task_df is not None and not _task_df.empty and "task_type" in _task_df.columns:
+            for _, _t in _task_df.iterrows():
+                _task_type_map[str(_t.get("task_id", ""))] = str(_t.get("task_type", ""))
+
         for _, _a in _acts_df.iterrows():
             _tid = str(_a.get("task_id", ""))
             def _s(v): return v.isoformat() if isinstance(v, (pd.Timestamp,)) and pd.notna(v) else (str(v)[:19] if v and str(v) not in ("None","NaT","nan","") else "")
@@ -149,6 +184,8 @@ def _build_full_data(
                 "original_duration": round(float(_a.get("original_duration", 0)), 1),
                 "total_float_days":  round(_float_map.get(_tid, 0), 1),
                 "is_critical":       _critical_map.get(_tid, False),
+                "wbs_id":            str(_a.get("wbs_id", "")),
+                "task_type":         _task_type_map.get(_tid, ""),
             })
         # Sort by WBS then planned_start for sensible gantt ordering
         gantt.sort(key=lambda x: (x["wbs_name"], x["planned_start"] or ""))
@@ -226,6 +263,9 @@ def _build_full_data(
         "lookahead":            lookahead,
         "milestones":           milestones,
         "procurement":          procurement,
+        "oos":              oos,
+        "bottleneck":       bottleneck,
+        "all_relationships": all_relationships,
         "resource_loading":     resource_loading,
         "gantt":                gantt,
         # AI

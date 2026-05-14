@@ -367,30 +367,26 @@ def build_project_info(tables: dict, activities_df: pd.DataFrame,
         else:
             bac = ac_total = ev_total = 0.0
 
-        # Weights based on cost — always normalised so Σweight == 1
         activities_df = activities_df.copy()
-        if bac > 0:
-            cost_by_task = (
-                resources_df.groupby("task_id")["target_cost"].sum()
-                if not resources_df.empty else pd.Series(dtype=float)
-            )
-            activities_df["_tc"] = activities_df["task_id"].map(cost_by_task).fillna(0)
-            zero_mask = activities_df["_tc"] == 0
-            if zero_mask.any() and n_total > 0:
-                activities_df.loc[zero_mask, "_tc"] = bac / n_total
-            total_tc = activities_df["_tc"].sum()
-            activities_df["weight"] = (
-                activities_df["_tc"] / total_tc if total_tc > 0 else 1.0 / n_total
-            )
+        cost_by_task = (
+            resources_df.groupby("task_id")["target_cost"].sum()
+            if not resources_df.empty else pd.Series(dtype=float)
+        )
+        activities_df["_tc"] = activities_df["task_id"].map(cost_by_task).fillna(0.0)
+
+        # PV = Σ(budget_i × planned_pct_i / 100) — direct, no phantom weights
+        pv = (activities_df["_tc"] * activities_df["planned_pct"] / 100.0).sum()
+
+        # Cost-proportional weights for overall_planned/actual display metrics only
+        total_tc = activities_df["_tc"].sum()
+        if total_tc > 0:
+            activities_df["weight"] = activities_df["_tc"] / total_tc
         else:
             activities_df["weight"] = 1.0 / n_total if n_total > 0 else 0.0
 
         overall_planned  = (activities_df["planned_pct"]       * activities_df["weight"]).sum()
         overall_actual   = (activities_df["phys_complete_pct"] * activities_df["weight"]).sum()
         overall_variance = overall_actual - overall_planned
-
-        # PV = planned value to data_date
-        pv = (activities_df["planned_pct"] / 100.0 * activities_df["weight"] * bac).sum()
 
         spi = ev_total / pv      if pv      > 0 else 0.0
         cpi = ev_total / ac_total if ac_total > 0 else 0.0
@@ -674,21 +670,19 @@ def process(tables: dict) -> dict[str, pd.DataFrame]:
     project_df    = build_project_info(tables, activities_df,
                                        resources_df, data_date)
 
-    # Sync final normalised weights into activities for downstream use
+    # Sync final cost-proportional weights into activities for downstream use
     if not project_df.empty and not activities_df.empty:
         bac = float(project_df.iloc[0].get("BAC", 0))
-        if bac > 0 and not resources_df.empty:
+        if not resources_df.empty:
             cost_by_task = resources_df.groupby("task_id")["target_cost"].sum()
             activities_df = activities_df.copy()
-            activities_df["_tc"] = activities_df["task_id"].map(cost_by_task).fillna(0)
-            n = len(activities_df)
-            zero_mask = activities_df["_tc"] == 0
-            if zero_mask.any() and n > 0:
-                activities_df.loc[zero_mask, "_tc"] = bac / n
+            activities_df["_tc"] = activities_df["task_id"].map(cost_by_task).fillna(0.0)
             total_tc = activities_df["_tc"].sum()
-            activities_df["weight"] = (
-                activities_df["_tc"] / total_tc if total_tc > 0 else 1.0 / n
-            )
+            n = len(activities_df)
+            if total_tc > 0:
+                activities_df["weight"] = activities_df["_tc"] / total_tc
+            else:
+                activities_df["weight"] = 1.0 / n if n > 0 else 0.0
     else:
         bac = 0.0
 

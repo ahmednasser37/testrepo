@@ -10,6 +10,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+
 from flask import Flask, request, render_template, Response, redirect, url_for, stream_with_context
 
 from xer_parser import parse_xer_bytes_to_df, extract_data_date
@@ -114,6 +116,43 @@ def _build_full_data(
     milestones  = compare_milestones(baseline_tables, updated_tables, data_date)
     procurement = compute_procurement(baseline_tables, updated_tables, data_date)
 
+    # Resource loading (manpower + equipment per period)
+    resource_loading = updated_dm.get("resource_loading", {})
+
+    # Gantt activities (sorted by WBS for gantt chart rendering)
+    _acts_df = updated_dm.get("activities", None)
+    _task_df = updated_tables.get("TASK", None)
+    gantt = []
+    if _acts_df is not None and not _acts_df.empty:
+        # Float and critical flag from raw TASK table
+        _float_map: dict[str, float] = {}
+        _critical_map: dict[str, bool] = {}
+        if _task_df is not None and not _task_df.empty:
+            for _, _t in _task_df.iterrows():
+                _tid = str(_t.get("task_id", ""))
+                _float_map[_tid]    = float(_t.get("total_float_hr_cnt", 0) or 0) / 8.0
+                _critical_map[_tid] = str(_t.get("driving_path_flag", "")) == "Y"
+
+        for _, _a in _acts_df.iterrows():
+            _tid = str(_a.get("task_id", ""))
+            def _s(v): return v.isoformat() if isinstance(v, (pd.Timestamp,)) and pd.notna(v) else (str(v)[:19] if v and str(v) not in ("None","NaT","nan","") else "")
+            gantt.append({
+                "task_code":        str(_a.get("task_code", "")),
+                "task_name":        str(_a.get("task_name", "")),
+                "wbs_name":         str(_a.get("wbs_name", "")),
+                "status":           str(_a.get("status", "")),
+                "planned_start":    _s(_a.get("planned_start")),
+                "planned_finish":   _s(_a.get("planned_finish")),
+                "actual_start":     _s(_a.get("actual_start")),
+                "actual_finish":    _s(_a.get("actual_finish")),
+                "phys_complete_pct": round(float(_a.get("phys_complete_pct", 0)), 1),
+                "original_duration": round(float(_a.get("original_duration", 0)), 1),
+                "total_float_days":  round(_float_map.get(_tid, 0), 1),
+                "is_critical":       _critical_map.get(_tid, False),
+            })
+        # Sort by WBS then planned_start for sensible gantt ordering
+        gantt.sort(key=lambda x: (x["wbs_name"], x["planned_start"] or ""))
+
     # Chart data (for schedule tab)
     chart_data  = prepare_chart_data(result)
 
@@ -187,6 +226,8 @@ def _build_full_data(
         "lookahead":            lookahead,
         "milestones":           milestones,
         "procurement":          procurement,
+        "resource_loading":     resource_loading,
+        "gantt":                gantt,
         # AI
         "ai_summary":           ai_summary,
     }

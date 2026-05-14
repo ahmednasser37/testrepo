@@ -540,6 +540,117 @@ def build_scurve(activities_df: pd.DataFrame,
     return pd.DataFrame(rows)
 
 
+def build_resource_loading(tables: dict, activities_df: pd.DataFrame) -> dict:
+    """Compute per-period (monthly) manpower and equipment loading."""
+    taskrsrc = tables.get("TASKRSRC", pd.DataFrame())
+    rsrc     = tables.get("RSRC",     pd.DataFrame())
+
+    empty = {
+        "manpower": [], "equipment": [],
+        "manpower_peak": 0, "manpower_avg": 0,
+        "equipment_peak": 0, "equipment_avg": 0,
+    }
+
+    if taskrsrc.empty or activities_df.empty:
+        return empty
+
+    # rsrc_type lookup: RT_Labor → manpower, RT_Equip → equipment
+    rsrc_type_map: dict[str, str] = {}
+    if not rsrc.empty and "rsrc_id" in rsrc.columns and "rsrc_type" in rsrc.columns:
+        for _, r in rsrc.iterrows():
+            rsrc_type_map[str(r["rsrc_id"])] = str(r.get("rsrc_type", ""))
+
+    # Activity date lookup
+    act_dates: dict[str, tuple] = {}
+    for _, a in activities_df.iterrows():
+        ps = a.get("planned_start")
+        pf = a.get("planned_finish")
+        if ps is not None and pf is not None and pd.notna(ps) and pd.notna(pf):
+            act_dates[str(a["task_id"])] = (pd.Timestamp(ps), pd.Timestamp(pf))
+
+    # Date range
+    all_starts = [v[0] for v in act_dates.values()]
+    all_ends   = [v[1] for v in act_dates.values()]
+    if not all_starts:
+        return empty
+
+    range_start = min(all_starts)
+    range_end   = max(all_ends)
+    periods = pd.date_range(start=range_start, end=range_end, freq="ME")
+    if len(periods) == 0:
+        periods = pd.date_range(start=range_start,
+                                end=range_end + pd.Timedelta(days=31), freq="ME")
+
+    man_by_period: dict = {p: 0.0 for p in periods}
+    eq_by_period:  dict = {p: 0.0 for p in periods}
+
+    for _, tr in taskrsrc.iterrows():
+        tid   = str(tr.get("task_id", ""))
+        rid   = str(tr.get("rsrc_id", ""))
+        rtype = rsrc_type_map.get(rid, "RT_Labor")
+        qty   = float(tr.get("target_qty", 0) or 0)
+
+        dates = act_dates.get(tid)
+        if not dates or qty <= 0:
+            continue
+
+        ps, pf = dates
+        span_days = max(1, (pf - ps).days)
+
+        for p in periods:
+            p_start = p.replace(day=1)
+            p_end   = p
+
+            overlap_start = max(ps, p_start)
+            overlap_end   = min(pf, p_end)
+            if overlap_start >= overlap_end:
+                continue
+
+            overlap_days = (overlap_end - overlap_start).days
+            period_qty   = qty * (overlap_days / span_days)
+
+            if rtype == "RT_Equip":
+                eq_by_period[p]  = eq_by_period.get(p, 0)  + period_qty
+            else:
+                man_by_period[p] = man_by_period.get(p, 0) + period_qty
+
+    def _to_list(by_period: dict) -> list[dict]:
+        return [
+            {"period": p.strftime("%Y-%m"), "qty": round(v, 0)}
+            for p, v in sorted(by_period.items())
+        ]
+
+    def _stats(lst: list[dict]):
+        qtys = [x["qty"] for x in lst if x["qty"] > 0]
+        if not qtys:
+            return 0.0, 0.0
+        avg = sum(qtys) / len(qtys)
+        pk  = max(qtys)
+        return round(pk, 0), round(avg, 0)
+
+    man_list = _to_list(man_by_period)
+    eq_list  = _to_list(eq_by_period)
+    man_peak, man_avg = _stats(man_list)
+    eq_peak,  eq_avg  = _stats(eq_list)
+
+    # Annotate each point
+    for item in man_list:
+        item["is_peak"]    = item["qty"] == man_peak and man_peak > 0
+        item["above_avg"]  = item["qty"] > man_avg
+    for item in eq_list:
+        item["is_peak"]    = item["qty"] == eq_peak and eq_peak > 0
+        item["above_avg"]  = item["qty"] > eq_avg
+
+    return {
+        "manpower":       man_list,
+        "equipment":      eq_list,
+        "manpower_peak":  man_peak,
+        "manpower_avg":   man_avg,
+        "equipment_peak": eq_peak,
+        "equipment_avg":  eq_avg,
+    }
+
+
 # ── Main entry ────────────────────────────────────────────────────────────────
 
 def process(tables: dict) -> dict[str, pd.DataFrame]:
@@ -594,9 +705,10 @@ def process(tables: dict) -> dict[str, pd.DataFrame]:
     )
 
     return {
-        "activities":   activities_df,
-        "wbs":          wbs_df,
-        "resources":    resources_df,
-        "project_info": project_df,
-        "scurve":       scurve_df,
+        "activities":        activities_df,
+        "wbs":               wbs_df,
+        "resources":         resources_df,
+        "project_info":      project_df,
+        "scurve":            scurve_df,
+        "resource_loading":  build_resource_loading(tables, activities_df),
     }

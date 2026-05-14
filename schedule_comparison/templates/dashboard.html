@@ -19,6 +19,7 @@
         <div class="export-links">
           <a href="/export/csv?key={{ key }}" class="btn-secondary">⬇ CSV</a>
           <a href="/export/json?key={{ key }}" class="btn-secondary">⬇ JSON</a>
+          <button class="btn-report" id="open-report-modal" onclick="openReportModal()">📄 Report</button>
         </div>
       </div>
       <div class="project-flow">
@@ -47,6 +48,8 @@
       <button class="tab-btn" data-tab="milestones">Milestones</button>
       <button class="tab-btn" data-tab="procurement">Procurement</button>
       <button class="tab-btn" data-tab="ev">Earned Value</button>
+      <button class="tab-btn" data-tab="resources">Resources</button>
+      <button class="tab-btn" data-tab="gantt">Gantt</button>
       <button class="tab-btn" data-tab="wbs">WBS</button>
       <button class="tab-btn" data-tab="logic">Logic</button>
       <button class="tab-btn" data-tab="chat">AI Chat</button>
@@ -60,6 +63,8 @@
       <div id="panel-milestones" class="tab-panel"></div>
       <div id="panel-procurement" class="tab-panel"></div>
       <div id="panel-ev" class="tab-panel"></div>
+      <div id="panel-resources" class="tab-panel"></div>
+      <div id="panel-gantt" class="tab-panel"></div>
       <div id="panel-wbs" class="tab-panel"></div>
       <div id="panel-logic" class="tab-panel"></div>
       <div id="panel-chat" class="tab-panel"></div>
@@ -75,6 +80,41 @@
     </div>
     <div class="cc-drawer-body" id="cc-drawer-body"></div>
   </aside>
+
+  <!-- Report Generator Modal -->
+  <div id="report-modal-overlay" class="report-modal-overlay" style="display:none"></div>
+  <div id="report-modal" class="report-modal" style="display:none">
+    <div class="report-modal-header">
+      <span class="report-modal-title">📄 Report Generator</span>
+      <button class="report-modal-close" id="report-modal-close">✕</button>
+    </div>
+    <div class="report-modal-body">
+      <div class="report-format-label">REPORT FORMAT</div>
+      <div class="report-format-grid">
+        <label class="report-format-card selected" id="fmt-pdf">
+          <input type="radio" name="report-fmt" value="pdf" checked style="display:none">
+          <span class="report-format-icon">📄</span>
+          <span class="report-format-name">PDF</span>
+          <span class="report-format-desc">Print-ready report</span>
+        </label>
+        <label class="report-format-card" id="fmt-csv">
+          <input type="radio" name="report-fmt" value="csv" style="display:none">
+          <span class="report-format-icon">📊</span>
+          <span class="report-format-name">Excel / CSV</span>
+          <span class="report-format-desc">Data spreadsheet</span>
+        </label>
+      </div>
+      <div class="report-sections-label">SECTIONS TO INCLUDE</div>
+      <div class="report-sections-list">
+        <label class="report-section-item"><input type="checkbox" name="rpt-sec" value="kpi" checked> <span>KPI Summary</span><small>SPI, CPI, % complete, activity counts</small></label>
+        <label class="report-section-item"><input type="checkbox" name="rpt-sec" value="scurve" checked> <span>S-Curve Data</span><small>Planned vs Earned vs Actual values</small></label>
+        <label class="report-section-item"><input type="checkbox" name="rpt-sec" value="critical"> <span>Critical Path</span><small>Zero-float &amp; critical activities</small></label>
+        <label class="report-section-item"><input type="checkbox" name="rpt-sec" value="lookahead" checked> <span>4-Week Lookahead</span><small>Upcoming activities next 4 weeks</small></label>
+        <label class="report-section-item"><input type="checkbox" name="rpt-sec" value="variances" checked> <span>Activity Variances</span><small>All schedule changes</small></label>
+      </div>
+      <button class="report-generate-btn" id="report-generate-btn">Generate Report</button>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/@antv/g2@5/dist/g2.min.js"></script>
   <script src="/static/dashboard.js"></script>

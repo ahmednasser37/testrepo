@@ -154,6 +154,8 @@ function activateTab(name) {
       milestones:  renderMilestones,
       procurement: renderProcurement,
       ev:          renderEV,
+      resources:   renderResources,
+      gantt:       renderGantt,
       wbs:         renderWBS,
       logic:       renderLogic,
       chat:        renderChat,
@@ -1039,109 +1041,503 @@ function renderProcurement(el) {
   `;
 }
 
-/* ── Tab 7: Earned Value ─────────────────────────────────────────────────── */
+/* ── Tab 7: Earned Value (EVM Performance Dashboard) ────────────────────── */
 
 function renderEV(el) {
-  const ev = D.ev || {};
-  const K  = D.kpis || {};
-
-  if (!ev.has_cost_data) {
-    el.innerHTML = `
-      <h2 class="section-title">Earned Value</h2>
-      <div class="info-card">
-        <strong>No cost data found in the XER files</strong>
-        <p>EV analysis requires cost-loaded activities. Showing duration-based schedule metrics instead.</p>
-      </div>
-      <div class="kpi-grid" style="margin-top:24px;">
-        <div class="kpi-card">
-          <div class="kpi-val kpi-blue">${K.spi_duration != null ? fmt(K.spi_duration, 2) : '—'}</div>
-          <div class="kpi-label">SPI (Duration)</div>
-          <div class="kpi-desc">Duration-based schedule performance index</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-val kpi-blue">${K.pct_complete_weighted != null ? fmt(K.pct_complete_weighted, 1) + '%' : '—'}</div>
-          <div class="kpi-label">Weighted % Complete</div>
-          <div class="kpi-desc">Duration-weighted progress</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-val kpi-blue">${K.schedule_delay_days != null ? fmt(K.schedule_delay_days, 0) + 'd' : '—'}</div>
-          <div class="kpi-label">Schedule Delay</div>
-          <div class="kpi-desc">Net delay vs baseline</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-val kpi-blue">${K.float_consumption_days != null ? fmt(K.float_consumption_days, 1) + 'd' : '—'}</div>
-          <div class="kpi-label">Float Consumption</div>
-          <div class="kpi-desc">Average float consumed</div>
-        </div>
-      </div>`;
-    return;
-  }
-
+  const K   = D.kpis || {};
+  const ev  = D.ev   || {};
   const upd = ev.updated || {};
-  const bas = ev.baseline || {};
+  const scurve = D.scurve || {};
 
-  const fmtCost = v => v != null ? '$' + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—';
-  const fmtIdx  = v => v != null ? fmt(v, 3) : '—';
+  const hasCost = ev.has_cost_data;
+  const fmtCost = v => (v != null && v !== '') ? '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits:0}) : '—';
+  const fmtPct  = v => (v != null) ? fmt(v, 1) + '%' : '—';
+  const fmtIdx  = v => (v != null) ? fmt(v, 3) : '—';
+
+  // Values
+  const bac  = hasCost ? (upd.BAC  || 0) : 0;
+  const pv   = hasCost ? (upd.PV   || 0) : 0;
+  const ev_v = hasCost ? (upd.EV   || 0) : 0;
+  const ac   = hasCost ? (upd.AC   || 0) : 0;
+  const spi  = hasCost ? (upd.SPI  || K.spi_duration) : K.spi_duration;
+  const cpi  = hasCost ? (upd.CPI  || null) : null;
+
+  const schedPct  = upd.overall_planned_pct  || K.cum_pv_pct  || null;
+  const perfPct   = upd.overall_actual_pct   || K.cum_ev_pct  || null;
+  const svPct     = K.sv_pct;
+  const status    = K.schedule_status || (spi >= 1.05 ? 'AHEAD' : spi >= 0.95 ? 'ON TRACK' : 'BEHIND');
+  const statusCls = status === 'AHEAD' ? 'status-ahead' : status === 'ON TRACK' ? 'status-ontrack' : 'status-behind';
+
+  const timeElapsed = K.time_elapsed_pct;
+  const contractStart  = K.contract_start  || (upd.planned_start  ? String(upd.planned_start).slice(0,10)  : null);
+  const contractFinish = K.contract_finish || (upd.planned_finish ? String(upd.planned_finish).slice(0,10) : null);
+  const forecastFinish = K.forecast_finish;
 
   el.innerHTML = `
-    <h2 class="section-title">Earned Value Analysis</h2>
-    <div class="kpi-grid">
-      <div class="kpi-card">
-        <div class="kpi-val kpi-blue">${fmtCost(bas.BAC || upd.BAC)}</div>
-        <div class="kpi-label">BAC</div>
-        <div class="kpi-desc">Budget at Completion</div>
+    <div class="evm-page">
+      <!-- Top EVM KPI row (5 cards like Vision PMO) -->
+      <div class="evm-kpi-row">
+        <div class="evm-kpi-card evm-kpi-card--blue">
+          <div class="evm-kpi-label">BUDGET AT COMPLETION</div>
+          <div class="evm-kpi-abbr">BAC</div>
+          <div class="evm-kpi-value">${hasCost ? fmtCost(bac) : '—'}</div>
+          <div class="evm-kpi-sub">Total project budget</div>
+        </div>
+        <div class="evm-kpi-card evm-kpi-card--gold">
+          <div class="evm-kpi-label">PLANNED VALUE</div>
+          <div class="evm-kpi-abbr">PV</div>
+          <div class="evm-kpi-value">${hasCost ? fmtCost(pv) : '—'}</div>
+          <div class="evm-kpi-sub">${schedPct != null ? fmtPct(schedPct) + ' of budget planned' : 'No cost data'}</div>
+        </div>
+        <div class="evm-kpi-card evm-kpi-card--green">
+          <div class="evm-kpi-label">EARNED VALUE</div>
+          <div class="evm-kpi-abbr">EV</div>
+          <div class="evm-kpi-value">${hasCost ? fmtCost(ev_v) : '—'}</div>
+          <div class="evm-kpi-sub">${perfPct != null ? fmtPct(perfPct) + ' physically complete' : 'No cost data'}</div>
+        </div>
+        <div class="evm-kpi-card evm-kpi-card--teal">
+          <div class="evm-kpi-label">SCHEDULE % COMPLETE</div>
+          <div class="evm-kpi-abbr">SCHED</div>
+          <div class="evm-kpi-value">${schedPct != null ? fmtPct(schedPct) : fmtPct(K.pct_complete_weighted)}</div>
+          <div class="evm-kpi-sub">${schedPct != null ? fmtPct(schedPct) + ' planned' : 'Duration-based'}</div>
+        </div>
+        <div class="evm-kpi-card evm-kpi-card--purple">
+          <div class="evm-kpi-label">PERFORMANCE % COMPLETE</div>
+          <div class="evm-kpi-abbr">PERF</div>
+          <div class="evm-kpi-value">${perfPct != null ? fmtPct(perfPct) : fmtPct(K.pct_complete_weighted)}</div>
+          <div class="evm-kpi-sub">Work performed percentage</div>
+        </div>
       </div>
-      <div class="kpi-card">
-        <div class="kpi-val kpi-blue">${fmtCost(upd.EV)}</div>
-        <div class="kpi-label">EV</div>
-        <div class="kpi-desc">Earned Value</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-val kpi-blue">${fmtCost(upd.AC)}</div>
-        <div class="kpi-label">AC</div>
-        <div class="kpi-desc">Actual Cost</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-val kpi-${upd.SPI >= 1 ? 'green' : upd.SPI >= 0.8 ? 'orange' : 'red'}">${fmtIdx(upd.SPI)}</div>
-        <div class="kpi-label">SPI</div>
-        <div class="kpi-desc">Schedule Performance Index</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-val kpi-${upd.CPI >= 1 ? 'green' : upd.CPI >= 0.8 ? 'orange' : 'red'}">${fmtIdx(upd.CPI)}</div>
-        <div class="kpi-label">CPI</div>
-        <div class="kpi-desc">Cost Performance Index</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-val kpi-blue">${fmtCost(upd.EAC)}</div>
-        <div class="kpi-label">EAC</div>
-        <div class="kpi-desc">Estimate at Completion</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-val kpi-${(upd.VAC || 0) >= 0 ? 'green' : 'red'}">${fmtCost(upd.VAC)}</div>
-        <div class="kpi-label">VAC</div>
-        <div class="kpi-desc">Variance at Completion</div>
-      </div>
-    </div>
 
-    <div class="chart-container" style="margin-top:24px;">
-      <h2 class="section-title">S-Curve</h2>
-      <div id="chart-scurve"></div>
+      <!-- Contract / date / SPI row -->
+      <div class="evm-contract-row">
+        <div class="evm-contract-card">
+          <div class="evm-contract-label">CONTRACT START</div>
+          <div class="evm-contract-value">${contractStart ? fmtDate(contractStart) : '—'}</div>
+          <div class="evm-contract-sub">Contractual start date</div>
+        </div>
+        <div class="evm-contract-card">
+          <div class="evm-contract-label">CONTRACT FINISH</div>
+          <div class="evm-contract-value">${contractFinish ? fmtDate(contractFinish) : '—'}</div>
+          <div class="evm-contract-sub">Contractual end date</div>
+        </div>
+        <div class="evm-contract-card">
+          <div class="evm-contract-label">TIME ELAPSED</div>
+          <div class="evm-contract-value evm-contract-value--big">${timeElapsed != null ? timeElapsed + '%' : '—'}</div>
+          <div class="evm-contract-sub">From project start</div>
+          ${timeElapsed != null ? `<div class="evm-progress-bar"><div class="evm-progress-fill" style="width:${Math.min(100,timeElapsed)}%"></div></div>` : ''}
+        </div>
+        <div class="evm-contract-card">
+          <div class="evm-contract-label">FORECAST FINISH</div>
+          <div class="evm-contract-value">${forecastFinish ? fmtDate(forecastFinish) : '—'}</div>
+          <div class="evm-contract-sub">${spi != null ? 'SPI-adjusted' : 'Projected end date'}</div>
+        </div>
+        <div class="evm-contract-card">
+          <div class="evm-contract-label">SPI</div>
+          <div class="evm-contract-value evm-contract-value--${spi >= 1 ? 'green' : spi >= 0.8 ? 'amber' : 'red'}">${fmtIdx(spi)}</div>
+          <div class="evm-contract-sub">Schedule Performance Index</div>
+        </div>
+        <div class="evm-contract-card evm-contract-card--status">
+          <div class="evm-contract-label">SCHEDULE STATUS</div>
+          <div class="evm-status-badge evm-status-badge--${statusCls}">${status}</div>
+          <div class="evm-contract-sub">Overall project status</div>
+        </div>
+      </div>
+
+      <!-- S-Curve with date slicer -->
+      <div class="evm-section-card">
+        <div class="evm-section-header">
+          <div>
+            <div class="evm-section-title">S-CURVE ANALYSIS</div>
+            <div class="evm-section-sub">CUMULATIVE PV / EV — ACTIVITY HISTOGRAM</div>
+          </div>
+          <div class="evm-scurve-toggles" id="evm-scurve-toggles">
+            <button class="evm-toggle-btn active" data-view="cumulative">Cumulative</button>
+            <button class="evm-toggle-btn" data-view="periodic">Monthly</button>
+            <button class="evm-toggle-btn" data-view="spi">SPI Trend</button>
+          </div>
+        </div>
+        <div id="evm-scurve-chart" style="min-height:300px"></div>
+        <div class="evm-slicer-row">
+          <div class="evm-slicer-label">DATE SLICER</div>
+          <div class="evm-slicer-controls">
+            <button class="evm-slicer-btn" data-range="3m">Last 3M</button>
+            <button class="evm-slicer-btn" data-range="6m">Last 6M</button>
+            <button class="evm-slicer-btn" data-range="12m">Last 12M</button>
+            <button class="evm-slicer-btn active" data-range="all">All</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Interval PV vs EV bar chart -->
+      <div class="evm-section-card" style="margin-top:1rem">
+        <div class="evm-section-header">
+          <div>
+            <div class="evm-section-title">INTERVAL PV VS EV</div>
+            <div class="evm-section-sub">PERIOD-BY-PERIOD PERFORMANCE</div>
+          </div>
+          ${svPct != null ? `<span class="evm-sv-chip ${svPct >= 0 ? 'evm-sv-pos' : 'evm-sv-neg'}">SV%: ${svPct > 0 ? '+' : ''}${fmt(svPct,1)}%</span>` : ''}
+        </div>
+        <div id="evm-interval-chart" style="min-height:260px"></div>
+      </div>
+
+      ${!hasCost ? `
+      <div class="evm-no-cost-notice">
+        <strong>No cost data detected</strong> — showing duration-based metrics. Add cost-loaded resources to your XER file for full EVM analysis.
+      </div>` : ''}
     </div>
   `;
 
+  // ── Wire toggle buttons ───────────────────────────────────────────────────
+  let currentView = 'cumulative';
+  let currentRange = 'all';
+
+  function getFilteredScurve(rangeKey) {
+    const sc = scurve.updated || [];
+    const sb = scurve.baseline || [];
+    if (rangeKey === 'all' || !sc.length) return { sc, sb };
+    const now = sc[sc.length - 1]?.period_date;
+    if (!now) return { sc, sb };
+    const cutoff = new Date(now);
+    if (rangeKey === '3m')  cutoff.setMonth(cutoff.getMonth() - 3);
+    if (rangeKey === '6m')  cutoff.setMonth(cutoff.getMonth() - 6);
+    if (rangeKey === '12m') cutoff.setFullYear(cutoff.getFullYear() - 1);
+    const cutStr = cutoff.toISOString().slice(0,7);
+    return {
+      sc: sc.filter(p => (p.period_date||'') >= cutStr),
+      sb: sb.filter(p => (p.period_date||'') >= cutStr),
+    };
+  }
+
+  function renderScurveChart(view, range) {
+    const container = document.getElementById('evm-scurve-chart');
+    if (!container) return;
+    container.innerHTML = '';
+    const { sc, sb } = getFilteredScurve(range);
+
+    let data = [];
+    if (view === 'cumulative') {
+      sb.forEach(p => {
+        if (p.planned_cum_cost) data.push({ period: fmtDate(p.period_date), value: p.planned_cum_cost, series: 'PV (Planned)' });
+      });
+      sc.forEach(p => {
+        if (p.actual_cum_cost) data.push({ period: fmtDate(p.period_date), value: p.actual_cum_cost, series: 'EV (Earned)' });
+      });
+    } else if (view === 'periodic') {
+      sb.forEach(p => {
+        data.push({ period: fmtDate(p.period_date), value: p.planned_periodic_cost || 0, series: 'PV Monthly' });
+      });
+      sc.forEach(p => {
+        data.push({ period: fmtDate(p.period_date), value: p.actual_periodic_cost || 0, series: 'EV Monthly' });
+      });
+    } else if (view === 'spi') {
+      // Compute period SPI from cumulative data
+      const scMap = {};
+      sc.forEach(p => scMap[fmtDate(p.period_date)] = p);
+      sb.forEach(p => {
+        const dt = fmtDate(p.period_date);
+        const evP = scMap[dt];
+        if (evP && p.planned_cum_cost > 0) {
+          data.push({ period: dt, value: round2(evP.actual_cum_cost / p.planned_cum_cost), series: 'SPI Trend' });
+        }
+      });
+    }
+
+    if (!data.length) {
+      container.style.height = '80px';
+      container.innerHTML = '<p style="color:var(--text-secondary);padding:24px;text-align:center">No S-curve data available</p>';
+      return;
+    }
+    container.style.height = '300px';
+
+    if (view === 'periodic') {
+      renderG2Bar(container.id, data, 'period', 'value', 'series', 300);
+    } else {
+      renderG2Line(container.id, data, 'period', 'value', 'series', 300);
+    }
+  }
+
+  function renderIntervalChart() {
+    const container = document.getElementById('evm-interval-chart');
+    if (!container) return;
+    const sc = scurve.updated || [];
+    const sb = scurve.baseline || [];
+    const data = [];
+    sb.forEach((p, i) => {
+      const dt = fmtDate(p.period_date);
+      data.push({ period: dt, value: p.planned_periodic_cost || 0, series: 'PV' });
+      const evP = sc[i];
+      if (evP) data.push({ period: dt, value: evP.actual_periodic_cost || 0, series: 'EV' });
+    });
+    if (data.length) renderG2Bar('evm-interval-chart', data, 'period', 'value', 'series', 260);
+  }
+
+  // Toggle buttons
+  el.querySelectorAll('.evm-toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      el.querySelectorAll('.evm-toggle-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentView = btn.dataset.view;
+      renderScurveChart(currentView, currentRange);
+    });
+  });
+
+  // Slicer buttons
+  el.querySelectorAll('.evm-slicer-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      el.querySelectorAll('.evm-slicer-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentRange = btn.dataset.range;
+      renderScurveChart(currentView, currentRange);
+    });
+  });
+
   setTimeout(() => {
-    const scurve = D.scurve || {};
-    const scBase = (scurve.baseline || []).map(p => ([
-      { period: fmtDate(p.period_date), value: p.planned_cum_cost||0, series: 'Baseline Planned (Cum)' },
-      { period: fmtDate(p.period_date), value: p.planned_periodic_cost||0, series: 'Baseline Monthly' }
-    ])).flat();
-    const scUpd  = (scurve.updated  || []).map(p => ([
-      { period: fmtDate(p.period_date), value: p.actual_cum_cost||0, series: 'Actual (Cum)' },
-      { period: fmtDate(p.period_date), value: p.actual_periodic_cost||0, series: 'Actual Monthly' }
-    ])).flat();
-    const combined = [...scBase, ...scUpd];
-    if (combined.length) renderG2Combo('chart-scurve', combined, 'period', 320);
+    renderScurveChart('cumulative', 'all');
+    renderIntervalChart();
   }, 0);
+}
+
+function round2(v) { return Math.round(v * 100) / 100; }
+
+/* ── Tab: Resources (Manpower + Equipment Loading) ───────────────────────── */
+
+function renderResources(el) {
+  const RL = D.resource_loading || {};
+  const manpower  = RL.manpower  || [];
+  const equipment = RL.equipment || [];
+
+  const manPeak = RL.manpower_peak  || 0;
+  const manAvg  = RL.manpower_avg   || 0;
+  const eqPeak  = RL.equipment_peak || 0;
+  const eqAvg   = RL.equipment_avg  || 0;
+
+  el.innerHTML = `
+    <div class="res-page">
+      <!-- Summary row -->
+      <div class="res-summary-row">
+        <div class="res-summary-chip"><span class="res-chip-label">CUM PV%</span><span class="res-chip-val">${D.kpis?.cum_pv_pct != null ? D.kpis.cum_pv_pct + '%' : '—'}</span></div>
+        <div class="res-summary-chip"><span class="res-chip-label">CUM EV%</span><span class="res-chip-val">${D.kpis?.cum_ev_pct != null ? D.kpis.cum_ev_pct + '%' : '—'}</span></div>
+        <div class="res-summary-chip res-chip-sv ${(D.kpis?.sv_pct || 0) >= 0 ? 'pos' : 'neg'}"><span class="res-chip-label">SV%</span><span class="res-chip-val">${D.kpis?.sv_pct != null ? (D.kpis.sv_pct > 0 ? '+' : '') + fmt(D.kpis.sv_pct,1) + '%' : '—'}</span></div>
+      </div>
+
+      <!-- Manpower + Equipment side by side -->
+      <div class="res-charts-grid">
+        <!-- Manpower -->
+        <div class="res-chart-card">
+          <div class="res-chart-header">
+            <div>
+              <div class="res-chart-title">MANPOWER LOADING</div>
+              <div class="res-chart-sub">Workers required per period</div>
+            </div>
+            <div class="res-chart-stats">
+              <div class="res-stat"><span class="res-stat-label">PEAK</span><span class="res-stat-val res-stat-peak">${manPeak.toLocaleString()}</span></div>
+              <div class="res-stat"><span class="res-stat-label">AVG</span><span class="res-stat-val">${manAvg.toLocaleString()}</span></div>
+            </div>
+          </div>
+          <div class="res-legend">
+            <span class="res-legend-dot res-legend-peak"></span>Peak Load
+            <span class="res-legend-dot res-legend-above" style="margin-left:.75rem"></span>Above Avg
+            <span class="res-legend-dot res-legend-below" style="margin-left:.75rem"></span>Below Avg
+          </div>
+          <div id="res-manpower-chart" style="height:240px"></div>
+        </div>
+
+        <!-- Equipment -->
+        <div class="res-chart-card">
+          <div class="res-chart-header">
+            <div>
+              <div class="res-chart-title">EQUIPMENT LOADING</div>
+              <div class="res-chart-sub">Equipment units required per period</div>
+            </div>
+            <div class="res-chart-stats">
+              <div class="res-stat"><span class="res-stat-label">PEAK</span><span class="res-stat-val res-stat-peak-eq">${eqPeak.toLocaleString()}</span></div>
+              <div class="res-stat"><span class="res-stat-label">AVG</span><span class="res-stat-val">${eqAvg.toLocaleString()}</span></div>
+            </div>
+          </div>
+          <div class="res-legend">
+            <span class="res-legend-dot res-legend-peak-eq"></span>Peak Load
+            <span class="res-legend-dot res-legend-above-eq" style="margin-left:.75rem"></span>Above Avg
+            <span class="res-legend-dot res-legend-below-eq" style="margin-left:.75rem"></span>Below Avg
+          </div>
+          <div id="res-equipment-chart" style="height:240px"></div>
+        </div>
+      </div>
+
+      ${manpower.length === 0 && equipment.length === 0 ? `
+      <div class="info-card" style="margin-top:1.5rem">
+        <strong>No resource data found</strong>
+        <p>Resource loading requires cost-loaded activities with TASKRSRC assignments in the XER file.</p>
+      </div>` : ''}
+    </div>
+  `;
+
+  function renderResourceBar(containerId, items, colorPeak, colorAbove, colorBelow, avgLine) {
+    const container = document.getElementById(containerId);
+    if (!container || !items.length) return;
+
+    // Color each bar
+    const data = items.map(d => ({
+      period: d.period,
+      value:  d.qty,
+      color:  d.is_peak ? colorPeak : d.above_avg ? colorAbove : colorBelow,
+    }));
+
+    container.style.height = '240px';
+    const chart = new G2.Chart({ container, autoFit: true, height: 240 });
+    chart.options({
+      type: 'interval',
+      data,
+      encode: { x: 'period', y: 'value', color: 'color' },
+      scale:  { color: { type: 'identity' } },
+      style:  { radius: [3, 3, 0, 0] },
+      axis: {
+        y: { title: false, gridLineDash: [4,4] },
+        x: { title: false, label: { autoRotate: true, autoHide: true } },
+      },
+      annotations: avgLine > 0 ? [{
+        type:  'lineY',
+        data:  [avgLine],
+        style: { stroke: '#f59e0b', strokeWidth: 2, lineDash: [6,3] },
+        label: { text: `Avg ${avgLine.toLocaleString()}`, position: 'right', style: { fill: '#f59e0b', fontSize: 11 } },
+      }] : [],
+      interaction: { tooltip: { shared: true } },
+    });
+    chart.render();
+  }
+
+  setTimeout(() => {
+    if (manpower.length) renderResourceBar('res-manpower-chart', manpower, '#1e40af', '#3b82f6', '#93c5fd', manAvg);
+    if (equipment.length) renderResourceBar('res-equipment-chart', equipment, '#92400e', '#d97706', '#fcd34d', eqAvg);
+  }, 0);
+}
+
+/* ── Tab: Gantt Chart ─────────────────────────────────────────────────────── */
+
+function renderGantt(el) {
+  const activities = D.gantt || [];
+
+  if (!activities.length) {
+    el.innerHTML = `
+      <h2 class="section-title">Project Timeline — Gantt Chart</h2>
+      <div class="info-card"><p>No activity data available for Gantt chart.</p></div>`;
+    return;
+  }
+
+  // Date range
+  let minDate = null, maxDate = null;
+  activities.forEach(a => {
+    const s = a.planned_start ? new Date(a.planned_start) : null;
+    const f = a.planned_finish ? new Date(a.planned_finish) : null;
+    if (s && (!minDate || s < minDate)) minDate = s;
+    if (f && (!maxDate || f > maxDate)) maxDate = f;
+  });
+  if (!minDate || !maxDate) {
+    el.innerHTML = '<div class="info-card"><p>Activities have no date data.</p></div>';
+    return;
+  }
+
+  const totalMs    = maxDate - minDate;
+  const totalWeeks = Math.ceil(totalMs / (7 * 24 * 3600 * 1000));
+  const dataDate   = D.project?.updated_data_date ? new Date(D.project.updated_data_date) : null;
+
+  // Group by WBS
+  const wbsGroups = {};
+  activities.forEach(a => {
+    const w = a.wbs_name || 'Unassigned';
+    if (!wbsGroups[w]) wbsGroups[w] = [];
+    wbsGroups[w].push(a);
+  });
+
+  function pct(dateStr) {
+    if (!dateStr) return 0;
+    const d = new Date(dateStr);
+    return Math.max(0, Math.min(100, (d - minDate) / totalMs * 100));
+  }
+  function widthPct(startStr, finishStr) {
+    if (!startStr || !finishStr) return 0;
+    const s = new Date(startStr), f = new Date(finishStr);
+    return Math.max(0.5, (f - s) / totalMs * 100);
+  }
+  function barClass(a) {
+    if (a.is_critical) return 'gantt-bar--critical';
+    if (a.status === 'Completed') return 'gantt-bar--completed';
+    if (a.status === 'In Progress') return 'gantt-bar--inprogress';
+    return 'gantt-bar--notstarted';
+  }
+
+  // Build month header ticks
+  const ticks = [];
+  const cur = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+  while (cur <= maxDate) {
+    ticks.push({ label: cur.toLocaleDateString(undefined, {month:'short', year:'2-digit'}), pct: (cur - minDate) / totalMs * 100 });
+    cur.setMonth(cur.getMonth() + 1);
+  }
+
+  // Today marker
+  const todayPct = dataDate ? ((dataDate - minDate) / totalMs * 100) : null;
+
+  let rowsHtml = '';
+  Object.entries(wbsGroups).forEach(([wbs, acts]) => {
+    rowsHtml += `<div class="gantt-wbs-row"><div class="gantt-task-cell gantt-wbs-cell" title="${esc(wbs)}">${esc(wbs)}</div><div class="gantt-bar-cell"></div></div>`;
+    acts.forEach(a => {
+      const leftPct  = pct(a.planned_start);
+      const wPct     = widthPct(a.planned_start, a.planned_finish);
+      const cls      = barClass(a);
+      const progW    = Math.max(0, Math.min(wPct, a.phys_complete_pct / 100 * wPct));
+      rowsHtml += `
+        <div class="gantt-activity-row" title="${esc(a.task_code + ' — ' + a.task_name)}">
+          <div class="gantt-task-cell">
+            <span class="gantt-code">${esc(a.task_code)}</span>
+            <span class="gantt-name">${esc(a.task_name)}</span>
+          </div>
+          <div class="gantt-bar-cell">
+            <div class="gantt-bar ${cls}" style="left:${leftPct.toFixed(2)}%;width:${wPct.toFixed(2)}%">
+              <div class="gantt-bar-progress" style="width:${progW.toFixed(1)}%"></div>
+            </div>
+          </div>
+        </div>`;
+    });
+  });
+
+  const ticksHtml = ticks.map(t =>
+    `<div class="gantt-tick" style="left:${t.pct.toFixed(2)}%">${esc(t.label)}</div>`
+  ).join('');
+
+  const todayHtml = todayPct != null
+    ? `<div class="gantt-today-line" style="left:${todayPct.toFixed(2)}%"><span class="gantt-today-label">TODAY</span></div>`
+    : '';
+
+  el.innerHTML = `
+    <div class="gantt-page">
+      <div class="gantt-header-row">
+        <h2 class="section-title" style="margin:0">PROJECT TIMELINE — GANTT CHART</h2>
+        <div class="gantt-meta">${activities.length} Activities · ${totalWeeks} Weeks</div>
+        <div class="gantt-legend">
+          <span class="gantt-legend-item"><span class="gantt-legend-dot gantt-legend-dot--notstarted"></span>Not Started</span>
+          <span class="gantt-legend-item"><span class="gantt-legend-dot gantt-legend-dot--inprogress"></span>In Progress</span>
+          <span class="gantt-legend-item"><span class="gantt-legend-dot gantt-legend-dot--completed"></span>Completed</span>
+          <span class="gantt-legend-item"><span class="gantt-legend-dot gantt-legend-dot--critical"></span>Critical</span>
+        </div>
+      </div>
+
+      <!-- Two-panel Gantt -->
+      <div class="gantt-container">
+        <!-- Header row -->
+        <div class="gantt-header">
+          <div class="gantt-task-header">WBS / ACTIVITY</div>
+          <div class="gantt-timeline-header">
+            ${ticksHtml}
+            ${todayHtml}
+          </div>
+        </div>
+        <!-- Rows -->
+        <div class="gantt-rows" id="gantt-rows">
+          ${rowsHtml}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 /* ── Tab 8: WBS ──────────────────────────────────────────────────────────── */
@@ -1354,6 +1750,48 @@ function renderChat(el) {
     if (chip) sendMessage(chip.dataset.question);
   });
 }
+
+/* ── Report Generator ────────────────────────────────────────────────────── */
+
+function openReportModal() {
+  document.getElementById('report-modal-overlay').style.display = 'block';
+  document.getElementById('report-modal').style.display = 'block';
+}
+function closeReportModal() {
+  document.getElementById('report-modal-overlay').style.display = 'none';
+  document.getElementById('report-modal').style.display = 'none';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Format card toggle
+  document.querySelectorAll('.report-format-card').forEach(card => {
+    card.addEventListener('click', () => {
+      document.querySelectorAll('.report-format-card').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+    });
+  });
+
+  // Close modal
+  const closeBtn = document.getElementById('report-modal-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeReportModal);
+  const overlay = document.getElementById('report-modal-overlay');
+  if (overlay) overlay.addEventListener('click', closeReportModal);
+
+  // Generate report
+  const genBtn = document.getElementById('report-generate-btn');
+  if (genBtn) genBtn.addEventListener('click', () => {
+    const fmt = document.querySelector('input[name="report-fmt"]:checked')?.value || 'pdf';
+    const sections = [...document.querySelectorAll('input[name="rpt-sec"]:checked')].map(el => el.value);
+
+    if (fmt === 'pdf') {
+      closeReportModal();
+      setTimeout(() => window.print(), 200);
+    } else {
+      // CSV export — redirect to existing endpoint
+      window.location.href = '/export/csv?key=' + encodeURIComponent(KEY);
+    }
+  });
+});
 
 /* ── Bootstrap ───────────────────────────────────────────────────────────── */
 

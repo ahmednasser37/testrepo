@@ -10,6 +10,7 @@ _KEYWORDS = [
     "procur", "supply", "long lead", "short lead", "vendor",
     "purchase", "delivery", "logistic", "submittal",
     "long-lead", "short-lead", "material supply", "equipment supply",
+    "fabricat", "material"
 ]
 
 
@@ -34,7 +35,7 @@ def compute_procurement(
     data_date,
 ) -> dict:
     """Return procurement analysis dict."""
-    u_wbs  = updated_tables.get("WBS",  pd.DataFrame())
+    u_wbs  = updated_tables.get("PROJWBS", updated_tables.get("WBS", pd.DataFrame()))
     u_task = updated_tables.get("TASK", pd.DataFrame())
     b_task = baseline_tables.get("TASK", pd.DataFrame())
 

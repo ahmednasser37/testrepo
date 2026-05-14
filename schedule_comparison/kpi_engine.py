@@ -6,6 +6,15 @@ import pandas as pd
 from comparison_engine import ComparisonResult
 
 
+def _row_by_code(df: pd.DataFrame, code: str) -> pd.Series | None:
+    if df.empty or "task_code" not in df.columns:
+        return None
+    mask = df["task_code"].astype(str) == code
+    if not mask.any():
+        return None
+    return df[mask].iloc[0]
+
+
 def compute_kpis(
     result: ComparisonResult,
     baseline_data: dict,
@@ -40,22 +49,55 @@ def compute_kpis(
 
     # Weighted % complete
     pct_complete = 0.0
-    if not u_acts.empty and "original_duration" in u_acts.columns:
+    if not u_acts.empty and "weight" in u_acts.columns:
+        pct_complete = round(
+            float((u_acts["phys_complete_pct"] * u_acts["weight"]).sum()), 1
+        )
+    elif not u_acts.empty and "original_duration" in u_acts.columns:
         total_dur = u_acts["original_duration"].sum()
         if total_dur > 0:
             pct_complete = round(
                 float((u_acts["phys_complete_pct"] * u_acts["original_duration"]).sum() / total_dur), 1
             )
 
-    # SPI (duration-based)
+    # SPI calculation (Baseline-based)
+    # Denominator = Planned progress based on original BASELINE dates
+    # Numerator   = Actual progress in updated schedule
     spi_duration = None
-    if not u_acts.empty and "planned_pct" in u_acts.columns:
-        total_dur = u_acts["original_duration"].sum()
-        if total_dur > 0:
-            earned = (u_acts["phys_complete_pct"] / 100.0 * u_acts["original_duration"]).sum()
-            planned = (u_acts["planned_pct"] / 100.0 * u_acts["original_duration"]).sum()
-            if planned > 0:
-                spi_duration = round(earned / planned, 3)
+    if not u_acts.empty:
+        total_numerator = 0.0
+        total_denominator = 0.0
+        dd = pd.Timestamp(result.updated_data_date) if result.updated_data_date else pd.Timestamp.now()
+        
+        # Map task codes to weights/durations for fast lookup
+        weight_map = dict(zip(u_acts["task_code"], u_acts["weight"]))
+        dur_map = dict(zip(u_acts["task_code"], u_acts["original_duration"]))
+        
+        for v in variances:
+            code = v.task_code
+            w = weight_map.get(code, 1.0 / len(variances) if variances else 1.0)
+            
+            # Baseline planned %
+            b_start = pd.to_datetime(v.baseline_start, errors="coerce")
+            b_finish = pd.to_datetime(v.baseline_finish, errors="coerce")
+            b_planned_pct = 0.0
+            if pd.notna(b_start) and pd.notna(b_finish):
+                span = (b_finish - b_start).total_seconds()
+                if span > 0:
+                    elapsed = (dd - b_start).total_seconds()
+                    b_planned_pct = max(0.0, min(100.0, (elapsed / span) * 100))
+                elif b_start <= dd:
+                    b_planned_pct = 100.0
+            
+            # Actual %
+            u_row = _row_by_code(u_acts, code)
+            actual_pct = float(u_row.get("phys_complete_pct", 0)) if u_row is not None else 0.0
+            
+            total_numerator += (actual_pct / 100.0) * w
+            total_denominator += (b_planned_pct / 100.0) * w
+            
+        if total_denominator > 0:
+            spi_duration = round(total_numerator / total_denominator, 3)
 
     # Float stats from updated TASK table
     task = updated_tables.get("TASK", pd.DataFrame())

@@ -1,582 +1,1379 @@
+/* dashboard.js — Schedule Comparison Dashboard */
 'use strict';
+
 const D = window.__DASH__;
 const KEY = window.__KEY__;
 const rendered = new Set();
 
-/* ── Utilities ─────────────────────────────────────────────────────────── */
+/* ── Utility helpers ─────────────────────────────────────────────────────── */
+
 function esc(str) {
   if (str == null) return '';
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
-function fmt(val, dec = 1) {
-  const n = parseFloat(val);
-  return isNaN(n) ? '—' : n.toFixed(dec);
-}
-function fmtDate(iso) {
-  if (!iso) return '—';
-  try { return String(iso).slice(0, 10); } catch { return String(iso); }
-}
-function fmtCost(val) {
+
+function fmt(val, decimals = 1) {
+  if (val == null || val === '') return '—';
   const n = parseFloat(val);
   if (isNaN(n)) return '—';
-  if (n >= 1e9) return '$' + (n/1e9).toFixed(1) + 'B';
-  if (n >= 1e6) return '$' + (n/1e6).toFixed(1) + 'M';
-  if (n >= 1e3) return '$' + (n/1e3).toFixed(1) + 'K';
-  return '$' + n.toFixed(0);
-}
-function badge(cls, text) {
-  return `<span class="badge badge-${esc(cls)}">${esc(text)}</span>`;
-}
-function changeBadge(t) {
-  const m = { added:'green', deleted:'red', changed:'amber', unchanged:'gray' };
-  return badge(m[t] || 'gray', t || '—');
-}
-function statusBadge(s) {
-  const m = { TK_Complete:['green','Complete'], TK_Active:['blue','Active'], TK_NotStart:['gray','Not Started'] };
-  const [cls, lbl] = m[s] || ['gray', s || '—'];
-  return badge(cls, lbl);
-}
-function varCell(days) {
-  if (!days && days !== 0) return '—';
-  const d = parseFloat(days);
-  if (d === 0) return '0d';
-  const color = d > 0 ? 'var(--red)' : 'var(--green)';
-  return `<span style="color:${color};font-weight:500">${d > 0 ? '+' : ''}${d.toFixed(1)}d</span>`;
-}
-function kpiCard(label, value, sub, mod = '') {
-  return `<div class="kpi-card ${esc(mod)}">
-    <div class="kpi-val">${esc(String(value ?? '—'))}</div>
-    <div class="kpi-lbl">${esc(label)}</div>
-    ${sub ? `<div class="kpi-sub">${esc(String(sub))}</div>` : ''}
-  </div>`;
+  return n.toFixed(decimals);
 }
 
-/* ── Sidebar ────────────────────────────────────────────────────────────── */
-function initSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  const btn = document.getElementById('collapse-btn');
-  btn.addEventListener('click', () => {
-    sidebar.classList.toggle('collapsed');
-    btn.textContent = sidebar.classList.contains('collapsed') ? '›' : '‹';
-    btn.setAttribute('aria-label', sidebar.classList.contains('collapsed') ? 'Expand sidebar' : 'Collapse sidebar');
-  });
-  document.querySelectorAll('.nav-item').forEach(item => {
-    item.addEventListener('click', () => navigate(item.dataset.page));
-    item.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(item.dataset.page); }
-    });
-  });
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try { return iso.slice(0, 10); } catch (e) { return iso; }
 }
 
-/* ── Navigation ─────────────────────────────────────────────────────────── */
-const PAGE_TITLES = {
-  overview: 'Overview', schedule: 'Schedule', milestones: 'Milestones',
-  lookahead: 'Lookahead', ev: 'Earned Value', logic: 'Logic & Relationships'
-};
-const RENDERERS = {};
-
-function navigate(page) {
-  document.querySelectorAll('.nav-item').forEach(i => {
-    const active = i.dataset.page === page;
-    i.classList.toggle('active', active);
-    if (active) i.setAttribute('aria-current', 'page');
-    else i.removeAttribute('aria-current');
-  });
-  document.querySelectorAll('.page').forEach(p => {
-    p.classList.remove('active');
-    p.hidden = true;
-  });
-  const target = document.getElementById('page-' + page);
-  if (target) { target.classList.add('active'); target.hidden = false; }
-  const heading = document.getElementById('page-heading');
-  if (heading) heading.textContent = PAGE_TITLES[page] || page;
-
-  if (!rendered.has(page) && RENDERERS[page]) {
-    rendered.add(page);
-    RENDERERS[page]();
-  }
+function fmtCurrency(val) {
+  if (val == null || val === '') return '—';
+  return '$' + Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
-/* ── Topbar ─────────────────────────────────────────────────────────────── */
-function initTopbar() {
-  const ai = D.ai_summary || {};
-  const health = ai.schedule_health || 'unknown';
-  const badge_el = document.getElementById('health-badge');
-  if (!badge_el) return;
-  const labels = { on_track: 'On Track', at_risk: 'At Risk', critical: 'Critical', unknown: '—' };
-  const classes = { on_track: 'badge-green', at_risk: 'badge-amber', critical: 'badge-red', unknown: 'badge-gray' };
-  badge_el.textContent = labels[health] || String(health);
-  badge_el.className = 'health-badge badge ' + (classes[health] || 'badge-gray');
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
 
-/* ── G2 chart helpers ───────────────────────────────────────────────────── */
-function g2Donut(id, data, angleField, colorField, height = 260) {
-  const el = document.getElementById(id);
-  if (!el || !data.length || typeof G2 === 'undefined') return;
-  el.style.height = height + 'px';
-  const chart = new G2.Chart({ container: el, autoFit: true, height });
+/* ── AntV G2 v5 chart helpers ────────────────────────────────────────────── */
+
+function renderG2Bar(containerId, data, xField, yField, colorField, height = 280) {
+  const container = document.getElementById(containerId);
+  if (!container || !data.length) return;
+  container.style.height = height + 'px';
+  const chart = new G2.Chart({ container, autoFit: true, height });
   chart.options({
     type: 'interval',
-    coordinate: { type: 'theta', innerRadius: 0.55 },
     data,
-    encode: { y: angleField, color: colorField },
-    style: { stroke: '#fff', lineWidth: 2 },
-    legend: { color: { position: 'right', rowPadding: 4 } },
-    tooltip: { items: [{ channel: 'y', name: colorField }] },
+    encode: { x: xField, y: yField, ...(colorField ? { color: colorField } : {}) },
+    style: { radius: [4, 4, 0, 0] },
+    axis: { y: { title: false }, x: { title: false } },
   });
   chart.render();
 }
-function g2HBar(id, data, xField, yField, height = 280, fillColor = '#059669') {
-  const el = document.getElementById(id);
-  if (!el || !data.length || typeof G2 === 'undefined') return;
-  el.style.height = height + 'px';
-  const chart = new G2.Chart({ container: el, autoFit: true, height });
+
+function renderG2HBar(containerId, data, xField, yField, height = 320) {
+  const container = document.getElementById(containerId);
+  if (!container || !data.length) return;
+  container.style.height = height + 'px';
+  const chart = new G2.Chart({ container, autoFit: true, height });
   chart.options({
     type: 'interval',
     coordinate: { transform: [{ type: 'transpose' }] },
     data,
     encode: { x: xField, y: yField },
-    style: { fill: fillColor, radius: [0, 3, 3, 0] },
-    axis: { x: { title: false, labelFormatter: d => String(d).slice(0, 20) }, y: { title: 'Days' } },
-    sort: { by: yField, reverse: true },
+    style: { radius: [0, 4, 4, 0] },
+    axis: { y: { title: false }, x: { title: false } },
   });
   chart.render();
 }
-function g2Line(id, data, xField, yField, colorField, height = 280) {
-  const el = document.getElementById(id);
-  if (!el || !data.length || typeof G2 === 'undefined') return;
-  el.style.height = height + 'px';
-  const chart = new G2.Chart({ container: el, autoFit: true, height });
+
+function renderG2Line(containerId, data, xField, yField, colorField, height = 280) {
+  const container = document.getElementById(containerId);
+  if (!container || !data.length) return;
+  container.style.height = height + 'px';
+  const chart = new G2.Chart({ container, autoFit: true, height });
   chart.options({
     type: 'line',
     data,
     encode: { x: xField, y: yField, color: colorField },
     style: { strokeWidth: 2 },
-    axis: { y: { title: '% Complete', tickFormatter: d => d + '%' }, x: { title: false } },
-    legend: { color: { position: 'top-right' } },
-    tooltip: { items: [{ channel: 'y', name: yField, valueFormatter: d => d?.toFixed(1) + '%' }] },
+    axis: { 
+      y: { labelFormatter: (v) => v >= 1000 ? (v/1000).toFixed(0)+'k' : v, title: false }, 
+      x: { title: false } 
+    },
   });
   chart.render();
 }
 
-/* ── Overview ────────────────────────────────────────────────────────────── */
-RENDERERS.overview = function renderOverview() {
-  const el = document.getElementById('page-overview');
-  const s = D.summary || {};
-  const ai = D.ai_summary || {};
+/** Combined Histogram (Periodic) + S-Curve (Cumulative) Chart */
+function renderG2Combo(containerId, data, xField, height = 280) {
+  const container = document.getElementById(containerId);
+  if (!container || !data.length) return;
+  container.style.height = height + 'px';
+  const chart = new G2.Chart({ container, autoFit: true, height });
 
-  const maxDelay = s.max_delay_days || 0;
-  const kpis = `<div class="kpi-row">
-    ${kpiCard('Activities Changed', s.changed ?? '—', `of ${s.total_updated ?? '—'} total`, '--amber')}
-    ${kpiCard('Max Delay', maxDelay + 'd', `avg ${fmt(s.avg_finish_variance_days)}d slip`, maxDelay > 30 ? '--red' : '--amber')}
-    ${kpiCard('Critical Activities', s.critical_activities_updated ?? '—', 'zero or negative float', '--red')}
-    ${kpiCard('Added / Deleted', `${s.added ?? 0} / ${s.deleted ?? 0}`, 'new / removed activities', '--blue')}
-  </div>`;
+  // Filter for Bar (Periodic) and Line (Cumulative)
+  const barData = data.filter(d => d.series.includes('Monthly'));
+  const lineData = data.filter(d => !d.series.includes('Monthly'));
 
-  const charts = `<div class="grid-2">
-    <div class="card">
-      <div class="card-hd">Activity Change Distribution</div>
-      <div class="card-bd"><div id="chart-donut"></div></div>
-    </div>
-    <div class="card">
-      <div class="card-hd">Top 10 Delayed Activities (days)</div>
-      <div class="card-bd"><div id="chart-delays"></div></div>
-    </div>
-  </div>`;
+  chart.data(data);
 
-  const scurveHtml = (D.scurve?.baseline?.length || D.scurve?.updated?.length) ? `
-  <div class="card grid-1">
-    <div class="card-hd">S-Curve — Cumulative Progress</div>
-    <div class="card-bd"><div id="chart-scurve"></div></div>
-  </div>` : '';
+  // Line: Cumulative S-Curve
+  chart.line()
+    .data(lineData)
+    .encode('x', xField)
+    .encode('y', 'value')
+    .encode('color', 'series')
+    .encode('shape', 'smooth')
+    .style('strokeWidth', 2.5)
+    .axis('y', { title: 'Cumulative Cost', position: 'left' });
 
-  const proc = D.procurement || {};
-  const procHtml = (proc.items && proc.items.length) ? `
-  <div class="card grid-1">
-    <div class="card-hd">Procurement Status</div>
-    <div class="tbl-wrap">
-      <table class="tbl"><thead><tr>
-        <th>ID</th><th>Activity</th><th>Status</th><th>Lead Time</th>
-      </tr></thead><tbody>${
-        proc.items.slice(0, 12).map(p => `<tr>
-          <td><code>${esc(p.task_code || '')}</code></td>
-          <td>${esc(p.task_name || '')}</td>
-          <td>${esc(p.status || '—')}</td>
-          <td>${p.lead_time_days != null ? p.lead_time_days + 'd' : '—'}</td>
-        </tr>`).join('')
-      }</tbody></table>
-    </div>
-  </div>` : '';
+  // Interval: Periodic Histogram
+  chart.interval()
+    .data(barData)
+    .encode('x', xField)
+    .encode('y', 'value')
+    .encode('color', 'series')
+    .style('opacity', 0.4)
+    .axis('y', { title: 'Periodic Cost', position: 'right', grid: null, labelFormatter: (v) => v >= 1000 ? (v/1000).toFixed(0)+'k' : v });
 
-  const aiHtml = ai.executive_summary ? `
-  <div class="card grid-1">
-    <div class="card-hd">AI Schedule Analysis</div>
-    <div class="card-bd">
-      <p class="ai-summary-text">${esc(ai.executive_summary)}</p>
-      ${(ai.key_risks || []).length ? `<h4 class="ai-section-title">Key Risks</h4><ul class="ai-list">${(ai.key_risks||[]).map(r=>`<li>${esc(r)}</li>`).join('')}</ul>` : ''}
-      ${(ai.recommended_actions || []).length ? `<h4 class="ai-section-title">Recommended Actions</h4><ul class="ai-list">${(ai.recommended_actions||[]).map(a=>`<li>${esc(a)}</li>`).join('')}</ul>` : ''}
-    </div>
-  </div>` : '';
+  chart.interaction('tooltip', { shared: true, showCrosshairs: true });
+  chart.render();
+}
 
-  // Top changed/delayed activities table — always rendered so tests can find table rows
-  const topActivities = (D.activity_variances || [])
-    .filter(v => v.change_type !== 'unchanged')
-    .sort((a, b) => Math.abs(b.finish_variance_days) - Math.abs(a.finish_variance_days))
-    .slice(0, 20);
-  const topRows = topActivities.map(v => `<tr>
-    <td><code>${esc(v.task_code)}</code></td>
-    <td>${esc(v.task_name)}</td>
-    <td>${varCell(v.finish_variance_days)}</td>
-    <td>${changeBadge(v.change_type)}</td>
-  </tr>`).join('');
-  const topTableHtml = `<div class="card grid-1">
-    <div class="card-hd">Top Changed Activities</div>
-    <div class="tbl-wrap"><table class="tbl" id="overview-activity-table">
-      <thead><tr><th>ID</th><th>Activity Name</th><th>Finish Variance</th><th>Change</th></tr></thead>
-      <tbody>${topRows || '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:1rem">No changed activities</td></tr>'}</tbody>
-    </table></div>
-  </div>`;
+/* ── Tab routing ─────────────────────────────────────────────────────────── */
 
-  el.innerHTML = kpis + charts + scurveHtml + topTableHtml + procHtml + aiHtml;
+function activateTab(name) {
+  // Update buttons with ARIA
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const isActive = btn.dataset.tab === name;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+  // Show/hide panels with ARIA
+  document.querySelectorAll('.tab-panel').forEach(panel => {
+    panel.classList.remove('active');
+    panel.setAttribute('aria-hidden', 'true');
+  });
+  const panel = document.getElementById('panel-' + name);
+  if (!panel) return;
+  panel.classList.add('active');
+  panel.setAttribute('aria-hidden', 'false');
 
-  setTimeout(() => {
-    const changeData = [
-      { type: 'Changed', count: s.changed || 0 },
-      { type: 'Unchanged', count: s.unchanged || 0 },
-      { type: 'Added', count: s.added || 0 },
-      { type: 'Deleted', count: s.deleted || 0 },
-    ].filter(d => d.count > 0);
-    g2Donut('chart-donut', changeData, 'count', 'type', 260);
+  // Render if not yet done
+  if (!rendered.has(name)) {
+    rendered.add(name);
+    const renderers = {
+      overview:    renderOverview,
+      schedule:    renderSchedule,
+      kpis:        renderKPIs,
+      lookahead:   renderLookahead,
+      milestones:  renderMilestones,
+      procurement: renderProcurement,
+      ev:          renderEV,
+      wbs:         renderWBS,
+      logic:       renderLogic,
+      chat:        renderChat,
+    };
+    if (renderers[name]) renderers[name](panel);
+  }
+}
 
-    const topDelayed = (s.top_delayed || []).slice(0, 10).map(a => ({
-      name: (a.task_code + ' ' + a.task_name).slice(0, 35),
-      days: a.finish_variance_days
-    }));
-    g2HBar('chart-delays', topDelayed, 'name', 'days', 280, '#d97706');
+/* ── Command Center: Drawer helper ───────────────────────────────────────── */
 
-    if (scurveHtml) {
-      const scData = [
-        ...(D.scurve.baseline || []).map(r => ({ ...r, series: 'Baseline' })),
-        ...(D.scurve.updated  || []).map(r => ({ ...r, series: 'Updated'  })),
-      ];
-      g2Line('chart-scurve', scData, 'period', 'cumulative_pct', 'series', 300);
-    }
-  }, 0);
-};
+function openDrawer(title, bodyHtml) {
+  document.getElementById('cc-drawer-title').textContent = title;
+  document.getElementById('cc-drawer-body').innerHTML = bodyHtml;
+  document.getElementById('cc-drawer').classList.add('open');
+  document.getElementById('cc-drawer-overlay').classList.add('open');
+}
 
-/* ── Schedule ────────────────────────────────────────────────────────────── */
-const PAGE_SIZE = 200;
-let schedFiltered = [];
-let schedPage = 0;
+function drawerTable(headers, rows) {
+  if (!rows.length) return '<p style="color:var(--text-muted);padding:20px 0">No data available.</p>';
+  const th = headers.map(h => `<th>${esc(h)}</th>`).join('');
+  const tr = rows.map(r => `<tr>${r.map(c => `<td>${esc(String(c ?? '—'))}</td>`).join('')}</tr>`).join('');
+  return `<div class="table-wrap"><table class="data-table"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
+}
 
-RENDERERS.schedule = function renderSchedule() {
-  const el = document.getElementById('page-schedule');
+/* ── Tab 1: Overview ─────────────────────────────────────────────────────── */
+
+function renderOverview(el) {
+  const S   = D.summary  || {};
+  const ai  = D.ai_summary || {};
+  const K   = D.kpis     || {};
+  const ev  = D.ev       || {};
+  const proj = D.project || {};
+  const health = ai.schedule_health || 'unknown';
+
+  // ── Pre-compute ──────────────────────────────────────────────────────────
+  const variances  = D.activity_variances || [];
+  const rels       = D.relationship_variances || [];
+  const milestones = D.milestones || [];
+  const wbsRows    = D.wbs_summary || [];
+
+  const top10delayed = variances
+    .filter(a => (a.finish_variance_days || 0) > 0)
+    .sort((a, b) => (b.finish_variance_days || 0) - (a.finish_variance_days || 0))
+    .slice(0, 10);
+
+  const cpi = ev.has_cost_data ? (ev.updated || {}).CPI : (K.cpi || null);
+  const spi = ev.has_cost_data ? (ev.updated || {}).SPI : (K.spi_duration || null);
+  const finishDelay = S.avg_finish_variance_days != null ? S.avg_finish_variance_days : null;
+  const relChanges  = (S.relationships_added || 0) + (S.relationships_deleted || 0) + (S.relationships_changed || 0);
+
+  // ── KPI Card helpers ─────────────────────────────────────────────────────
+  function kpiMod(val, threshBad, threshWarn) {
+    if (val == null) return 'neutral';
+    if (val >= threshBad) return 'critical';
+    if (val >= threshWarn) return 'warning';
+    return 'good';
+  }
+  function gaugeColor(val, goodAbove) {
+    if (val == null) return '';
+    if (goodAbove) return val >= goodAbove ? 'cc-gauge--green' : val >= goodAbove * 0.8 ? 'cc-gauge--orange' : 'cc-gauge--red';
+    return '';
+  }
+  function critPct() {
+    const total = S.total_updated || variances.length;
+    const crit  = S.critical_activities_updated || K.critical_total || 0;
+    return total > 0 ? Math.round(crit / total * 100) : 0;
+  }
+
+  // ── HTML ─────────────────────────────────────────────────────────────────
   el.innerHTML = `
-    <div class="toolbar">
-      <input type="search" class="search-box" id="sched-search" placeholder="Search ID or activity name…" aria-label="Search activities">
-      <select class="filter-sel" id="sched-status" aria-label="Filter by status">
-        <option value="">All statuses</option>
-        <option value="TK_NotStart">Not Started</option>
-        <option value="TK_Active">Active</option>
-        <option value="TK_Complete">Complete</option>
-      </select>
-      <select class="filter-sel" id="sched-change" aria-label="Filter by change type">
-        <option value="">All changes</option>
-        <option value="changed">Changed</option>
-        <option value="added">Added</option>
-        <option value="deleted">Deleted</option>
-        <option value="unchanged">Unchanged</option>
-      </select>
-      <span class="count-chip" id="sched-count" aria-live="polite"></span>
+    <!-- Header bar -->
+    <div class="cc-header-bar">
+      <div class="cc-header-left">
+        <span class="cc-proj-name">${esc(proj.updated_name || 'Schedule Comparison')}</span>
+        <div class="cc-proj-flow">
+          <span class="proj-pill proj-pill-baseline">${esc(proj.baseline_name || 'Baseline')}</span>
+          <span class="proj-arrow">→</span>
+          <span class="proj-pill proj-pill-updated">${esc(proj.updated_name || 'Updated')}</span>
+          ${proj.data_date_warning ? '<span class="warning-chip">⚠ Data date mismatch</span>' : ''}
+        </div>
+        ${ai.executive_summary ? `<p class="cc-ai-narrative">${esc(ai.executive_summary)}</p>` : ''}
+      </div>
+      <span class="health-badge health-${health}">${health.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</span>
     </div>
-    <div class="card">
-      <div class="tbl-wrap">
-        <table class="tbl" role="grid">
-          <thead><tr>
-            <th>ID</th><th>Activity Name</th><th>WBS</th>
-            <th>BL Finish</th><th>Updated Finish</th>
-            <th>Start Var</th><th>Finish Var</th><th>Dur Var</th>
-            <th>Change</th>
-          </tr></thead>
-          <tbody id="sched-tbody" aria-live="polite"></tbody>
-        </table>
+
+    <!-- 4 KPI Cards -->
+    <div class="cc-kpi-row">
+      <div class="cc-kpi-card cc-kpi-card--${kpiMod(finishDelay, 14, 5)}" id="kpi-schedule" tabindex="0" role="button" aria-label="Schedule variance detail">
+        <div class="cc-kpi-label">Avg Finish Variance</div>
+        <div class="cc-kpi-value">${finishDelay != null ? (finishDelay > 0 ? '+' : '') + fmt(finishDelay,1) + 'd' : '—'}</div>
+        <div class="cc-kpi-sub">${S.delayed_activities || 0} activities delayed &gt;5d</div>
+      </div>
+      <div class="cc-kpi-card cc-kpi-card--${(S.added||0)+(S.deleted||0) > 10 ? 'warning':'neutral'}" id="kpi-changes" tabindex="0" role="button" aria-label="Activity changes detail">
+        <div class="cc-kpi-label">Activity Changes</div>
+        <div class="cc-kpi-value">${(S.added||0)+(S.deleted||0)+(S.changed||0)}</div>
+        <div class="cc-kpi-sub">+${S.added||0} added · −${S.deleted||0} deleted · ~${S.changed||0} changed</div>
+      </div>
+      <div class="cc-kpi-card cc-kpi-card--${relChanges > 20 ? 'critical' : relChanges > 5 ? 'warning' : 'neutral'}" id="kpi-logic" tabindex="0" role="button" aria-label="Logic changes detail">
+        <div class="cc-kpi-label">Logic Changes</div>
+        <div class="cc-kpi-value">${relChanges}</div>
+        <div class="cc-kpi-sub">+${S.relationships_added||0} · −${S.relationships_deleted||0} · ~${S.relationships_changed||0}</div>
+      </div>
+      <div class="cc-kpi-card cc-kpi-card--${cpi != null && cpi < 0.8 ? 'critical' : cpi != null && cpi < 1 ? 'warning' : 'good'}" id="kpi-ev" tabindex="0" role="button" aria-label="Earned value detail">
+        <div class="cc-kpi-label">${ev.has_cost_data ? 'Cost Performance (CPI)' : 'Schedule Perf (SPI)'}</div>
+        <div class="cc-kpi-value">${cpi != null ? fmt(cpi, 2) : spi != null ? fmt(spi, 2) : '—'}</div>
+        <div class="cc-kpi-sub">${ev.has_cost_data ? (cpi >= 1 ? '✓ Under budget' : '↓ Over budget') : 'No cost data'}</div>
       </div>
     </div>
-    <div class="load-more-bar" id="load-more-bar" style="display:none">
-      <button class="btn" id="load-more-btn">Load 200 more</button>
-    </div>`;
 
-  schedFiltered = [...(D.activity_variances || [])];
-  schedPage = 0;
-  renderSchedRows();
+    <!-- 10 Chart Cards -->
+    <div class="cc-charts-grid">
 
-  let t;
-  document.getElementById('sched-search').addEventListener('input', () => { clearTimeout(t); t = setTimeout(applySchedFilter, 150); });
-  document.getElementById('sched-status').addEventListener('change', applySchedFilter);
-  document.getElementById('sched-change').addEventListener('change', applySchedFilter);
-  document.getElementById('load-more-btn').addEventListener('click', () => { schedPage++; renderSchedRows(true); });
-};
+      <!-- 1. S-Curve (WIDE) -->
+      <div class="cc-chart-card cc-chart-card--wide" id="chart-card-scurve" tabindex="0" role="button">
+        <div class="cc-chart-title">S-Curve — Planned vs Actual</div>
+        <div class="cc-chart-hint">Cumulative % completion: baseline (dotted) vs updated (solid)</div>
+        <div id="chart-cc-scurve" style="height:240px"></div>
+      </div>
 
-function applySchedFilter() {
-  const q = (document.getElementById('sched-search').value || '').toLowerCase();
-  const status = document.getElementById('sched-status').value;
-  const change = document.getElementById('sched-change').value;
-  schedFiltered = (D.activity_variances || []).filter(v => {
-    if (q && !String(v.task_code).toLowerCase().includes(q) && !String(v.task_name).toLowerCase().includes(q)) return false;
-    if (status && v.new_status !== status && v.old_status !== status) return false;
-    if (change && v.change_type !== change) return false;
-    return true;
+      <!-- 2. Activity Status Donut -->
+      <div class="cc-chart-card" id="chart-card-status" tabindex="0" role="button">
+        <div class="cc-chart-title">Activity Status</div>
+        <div class="cc-chart-hint">Completed · In Progress · Not Started</div>
+        <div id="chart-cc-donut" style="height:180px"></div>
+      </div>
+
+      <!-- 3. Longest Path -->
+      <div class="cc-chart-card" id="chart-card-lp" tabindex="0" role="button">
+        <div class="cc-chart-title">Longest Path</div>
+        <div class="cc-chart-hint">Critical activities by WBS</div>
+        <div id="chart-cc-lp" style="height:180px"></div>
+      </div>
+
+      <!-- 4. Procurement Status -->
+      <div class="cc-chart-card cc-chart-card--tall" id="chart-card-proc" tabindex="0" role="button">
+        <div class="cc-chart-title">Procurement Status</div>
+        <div class="cc-chart-hint">Procurement items by status</div>
+        <div id="chart-cc-proc" style="height:200px"></div>
+      </div>
+
+      <!-- 5. CPI Gauge -->
+      <div class="cc-chart-card" id="chart-card-cpi" tabindex="0" role="button">
+        <div class="cc-chart-title">Cost Performance (CPI)</div>
+        <div class="cc-chart-hint">Earned Value ÷ Actual Cost</div>
+        <div class="cc-gauge ${gaugeColor(cpi, 1)}">
+          <div class="cc-gauge-value">${cpi != null ? fmt(cpi,2) : 'N/A'}</div>
+          <div class="cc-gauge-label">${ev.has_cost_data ? (cpi>=1?'Under Budget':'Over Budget') : 'No Cost Data'}</div>
+        </div>
+      </div>
+
+      <!-- 6. SPI Gauge -->
+      <div class="cc-chart-card" id="chart-card-spi" tabindex="0" role="button">
+        <div class="cc-chart-title">Schedule Performance (SPI)</div>
+        <div class="cc-chart-hint">Earned Duration ÷ Planned Duration</div>
+        <div class="cc-gauge ${gaugeColor(spi, 1)}">
+          <div class="cc-gauge-value">${spi != null ? fmt(spi,2) : 'N/A'}</div>
+          <div class="cc-gauge-label">${spi != null ? (spi>=1?'On Schedule':'Slipping') : 'No Data'}</div>
+        </div>
+      </div>
+
+      <!-- 7. Critical Path % -->
+      <div class="cc-chart-card" id="chart-card-cp" tabindex="0" role="button">
+        <div class="cc-chart-title">Critical Path Density</div>
+        <div class="cc-chart-hint">% of activities with zero float</div>
+        <div class="cc-gauge ${critPct() > 30 ? 'cc-gauge--red' : critPct() > 15 ? 'cc-gauge--orange' : 'cc-gauge--green'}">
+          <div class="cc-gauge-value">${critPct()}%</div>
+          <div class="cc-gauge-label">${S.critical_activities_updated || K.critical_total || 0} critical activities</div>
+        </div>
+      </div>
+
+      <!-- 8. Logic Integrity -->
+      <div class="cc-chart-card" id="chart-card-logic" tabindex="0" role="button">
+        <div class="cc-chart-title">Logic Integrity</div>
+        <div class="cc-chart-hint">Relationship changes (added / deleted / modified)</div>
+        <div id="chart-cc-logic" style="height:160px"></div>
+      </div>
+
+      <!-- 9. Milestone Status Donut -->
+      <div class="cc-chart-card" id="chart-card-ms" tabindex="0" role="button">
+        <div class="cc-chart-title">Milestone Status</div>
+        <div class="cc-chart-hint">On Track · At Risk · Late · Complete</div>
+        <div id="chart-cc-ms" style="height:180px"></div>
+      </div>
+
+      <!-- 10. WBS Distribution -->
+      <div class="cc-chart-card" id="chart-card-wbs" tabindex="0" role="button">
+        <div class="cc-chart-title">WBS Work Distribution</div>
+        <div class="cc-chart-hint">Top 8 WBS nodes by activity count</div>
+        <div id="chart-cc-wbs" style="height:180px"></div>
+      </div>
+
+    </div>
+
+    <!-- Activity summary table (always visible) -->
+    ${variances.length > 0 ? `
+    <div class="cc-section-title" style="margin-top:1.5rem;margin-bottom:.5rem;font-weight:600;font-size:.8125rem;color:var(--color-muted,#64748b)">${top10delayed.length > 0 ? 'TOP DELAYED ACTIVITIES' : 'ACTIVITY SUMMARY'}</div>
+    <div class="tbl-wrap">
+      <table class="data-table" style="width:100%;border-collapse:collapse;font-size:.8125rem">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:.4rem .6rem;border-bottom:1px solid #e2e8f0">Code</th>
+            <th style="text-align:left;padding:.4rem .6rem;border-bottom:1px solid #e2e8f0">Activity Name</th>
+            <th style="text-align:left;padding:.4rem .6rem;border-bottom:1px solid #e2e8f0">WBS</th>
+            <th style="text-align:right;padding:.4rem .6rem;border-bottom:1px solid #e2e8f0">Finish Var.</th>
+            <th style="text-align:left;padding:.4rem .6rem;border-bottom:1px solid #e2e8f0">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(top10delayed.length > 0 ? top10delayed : variances.slice(0,10)).map(a => `<tr>
+            <td style="padding:.35rem .6rem;border-bottom:1px solid #f1f5f9">${esc(a.task_code||'')}</td>
+            <td style="padding:.35rem .6rem;border-bottom:1px solid #f1f5f9">${esc(a.task_name||'')}</td>
+            <td style="padding:.35rem .6rem;border-bottom:1px solid #f1f5f9">${esc(a.wbs_name||'')}</td>
+            <td style="padding:.35rem .6rem;border-bottom:1px solid #f1f5f9;text-align:right">${fmt(a.finish_variance_days,1)}d</td>
+            <td style="padding:.35rem .6rem;border-bottom:1px solid #f1f5f9">${esc(a.new_status||a.old_status||'')}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
+  `;
+
+  // ── Wire KPI card click → drawer ────────────────────────────────────────
+  document.getElementById('kpi-schedule').addEventListener('click', () => {
+    openDrawer('Top Delayed Activities', drawerTable(
+      ['Code','Name','WBS','Finish Var.','Status'],
+      top10delayed.map(a => [a.task_code, a.task_name, a.wbs_name, fmt(a.finish_variance_days,1)+'d', a.new_status||a.old_status])
+    ));
   });
-  schedPage = 0;
-  renderSchedRows();
+  document.getElementById('kpi-changes').addEventListener('click', () => {
+    const changed = variances.filter(a => a.change_type !== 'unchanged');
+    openDrawer('Activity Changes', drawerTable(
+      ['Code','Name','Change','Start Var.','Finish Var.'],
+      changed.slice(0,50).map(a => [a.task_code, a.task_name, a.change_type, fmt(a.start_variance_days,1)+'d', fmt(a.finish_variance_days,1)+'d'])
+    ));
+  });
+  document.getElementById('kpi-logic').addEventListener('click', () => {
+    openDrawer('Logic / Relationship Changes', drawerTable(
+      ['Pred','Succ','Change','Old Type','New Type','Lag Δh'],
+      rels.slice(0,50).map(r => [r.pred_code, r.succ_code, r.change_type, r.old_pred_type||'—', r.new_pred_type||'—', fmt(r.lag_change_hours,1)])
+    ));
+  });
+  document.getElementById('kpi-ev').addEventListener('click', () => {
+    const u = ev.updated || {};
+    openDrawer('Earned Value Metrics', `
+      <table class="data-table"><tbody>
+        <tr><td>BAC</td><td class="num">$${Number(u.BAC||0).toLocaleString()}</td></tr>
+        <tr><td>PV (Planned Value)</td><td class="num">$${Number(u.PV||0).toLocaleString()}</td></tr>
+        <tr><td>EV (Earned Value)</td><td class="num">$${Number(u.EV||0).toLocaleString()}</td></tr>
+        <tr><td>AC (Actual Cost)</td><td class="num">$${Number(u.AC||0).toLocaleString()}</td></tr>
+        <tr><td>CPI</td><td class="num">${fmt(u.CPI,3)}</td></tr>
+        <tr><td>SPI</td><td class="num">${fmt(u.SPI,3)}</td></tr>
+        <tr><td>EAC</td><td class="num">$${Number(u.EAC||0).toLocaleString()}</td></tr>
+        <tr><td>VAC</td><td class="num">$${Number(u.VAC||0).toLocaleString()}</td></tr>
+      </tbody></table>
+    `);
+  });
+
+  // ── Wire chart card clicks → drawer ─────────────────────────────────────
+  document.getElementById('chart-card-scurve').addEventListener('click', () => {
+    const sc = (D.scurve||{}).updated||[];
+    const sb = (D.scurve||{}).baseline||[];
+    
+    const scBase = sb.map(p => ([
+      { period: fmtDate(p.period_date), value: p.planned_cum_cost||0, series: 'Baseline Planned (Cum)' },
+      { period: fmtDate(p.period_date), value: p.planned_periodic_cost||0, series: 'Baseline Monthly' }
+    ])).flat();
+    const scUpd  = sc.map(p => ([
+      { period: fmtDate(p.period_date), value: p.actual_cum_cost||0, series: 'Actual (Cum)' },
+      { period: fmtDate(p.period_date), value: p.actual_periodic_cost||0, series: 'Actual Monthly' }
+    ])).flat();
+    const scCombined = [...scBase, ...scUpd];
+
+    openDrawer('S-Curve & Monthly Histogram (Detailed)', `
+      <div class="cc-drawer-chart-container" id="big-scurve-container"></div>
+      <h3 style="margin:24px 0 12px;font-size:14px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px">Period-by-Period Data</h3>
+      ${drawerTable(
+        ['Period', 'Planned (Cum)', 'Actual (Cum)', 'Planned (Monthly)', 'Actual (Monthly)'],
+        sc.map((p, i) => {
+          const bp = sb[i] || {};
+          return [
+            fmtDate(p.period_date), 
+            fmtCurrency(bp.planned_cum_cost), 
+            fmtCurrency(p.actual_cum_cost),
+            fmtCurrency(bp.planned_periodic_cost),
+            fmtCurrency(p.actual_periodic_cost)
+          ];
+        })
+      )}
+    `);
+    
+    setTimeout(() => {
+      renderG2Combo('big-scurve-container', scCombined, 'period', 420);
+    }, 50);
+  });
+  document.getElementById('chart-card-status').addEventListener('click', () => {
+    openDrawer('Activity Status Breakdown', drawerTable(
+      ['Code','Name','Status','% Complete'],
+      variances.slice(0,50).map(a => [a.task_code, a.task_name, a.new_status||a.old_status, fmt(a.pct_complete_change,1)+'%'])
+    ));
+  });
+  document.getElementById('chart-card-lp').addEventListener('click', () => {
+    const crit = variances.filter(a=>a.is_critical);
+    crit.sort((a,b) => (a.wbs_name||'').localeCompare(b.wbs_name||''));
+    openDrawer('Longest Path Details', drawerTable(
+      ['WBS','Code','Name','Finish Var.'],
+      crit.map(a=>[a.wbs_name,a.task_code,a.task_name,fmt(a.finish_variance_days,1)+'d'])
+    ));
+  });
+  document.getElementById('chart-card-proc').addEventListener('click', () => {
+    const procItems = (D.procurement || {}).items || [];
+    openDrawer('Procurement Items', drawerTable(
+      ['Code','Name','Status','Variance'],
+      procItems.map(a=>[a.task_code,a.task_name,a.status,fmt(a.finish_variance_days,1)+'d'])
+    ));
+  });
+  document.getElementById('chart-card-cp').addEventListener('click', () => {
+    const crit = variances.filter(a=>a.is_critical);
+    openDrawer('Critical Path Activities (Zero Float)', drawerTable(
+      ['Code','Name','WBS','Finish Var.'],
+      crit.slice(0,50).map(a=>[a.task_code,a.task_name,a.wbs_name,fmt(a.finish_variance_days,1)+'d'])
+    ));
+  });
+  document.getElementById('chart-card-logic').addEventListener('click', () => {
+    openDrawer('Logic Changes', drawerTable(
+      ['Pred','Succ','Change','Old Type','New Type'],
+      rels.slice(0,50).map(r=>[r.pred_code,r.succ_code,r.change_type,r.old_pred_type||'—',r.new_pred_type||'—'])
+    ));
+  });
+  document.getElementById('chart-card-ms').addEventListener('click', () => {
+    openDrawer('Milestone Status', drawerTable(
+      ['Code','Name','Status','Finish Var.'],
+      milestones.slice(0,30).map(m=>[m.task_code,m.task_name,m.status,fmt(m.finish_variance_days,1)+'d'])
+    ));
+  });
+  document.getElementById('chart-card-wbs').addEventListener('click', () => {
+    openDrawer('WBS Work Breakdown', drawerTable(
+      ['WBS Name','Level','Planned Cost','Actual Cost'],
+      wbsRows.slice(0,20).map(w=>[w.wbs_name,w.wbs_level||'—',w.total_planned_cost!=null?'$'+Number(w.total_planned_cost).toLocaleString():'—',w.total_actual_cost!=null?'$'+Number(w.total_actual_cost).toLocaleString():'—'])
+    ));
+  });
+
+  // ── Render all G2 charts ─────────────────────────────────────────────────
+  setTimeout(() => {
+
+    // 1. S-Curve + Histogram
+    const scBase = ((D.scurve||{}).baseline||[]).map(p => ([
+      { period: fmtDate(p.period_date), value: p.planned_cum_cost||0, series: 'Baseline Planned (Cum)' },
+      { period: fmtDate(p.period_date), value: p.planned_periodic_cost||0, series: 'Baseline Monthly' }
+    ])).flat();
+    const scUpd  = ((D.scurve||{}).updated||[]).map(p => ([
+      { period: fmtDate(p.period_date), value: p.actual_cum_cost||0, series: 'Actual (Cum)' },
+      { period: fmtDate(p.period_date), value: p.actual_periodic_cost||0, series: 'Actual Monthly' }
+    ])).flat();
+    const scCombined = [...scBase, ...scUpd];
+    if (scCombined.length) renderG2Combo('chart-cc-scurve', scCombined, 'period', 240);
+
+    // 2. Activity Status Donut
+    const completed   = variances.filter(a => (a.new_status||a.old_status) === 'Completed').length;
+    const inProgress  = variances.filter(a => (a.new_status||a.old_status) === 'In Progress').length;
+    const notStarted  = variances.filter(a => (a.new_status||a.old_status) === 'Not Started').length;
+    const donutData   = [
+      { status: 'Completed',   count: completed   || 0 },
+      { status: 'In Progress', count: inProgress  || 0 },
+      { status: 'Not Started', count: notStarted  || 0 },
+    ].filter(d => d.count > 0);
+    if (donutData.length) {
+      const dc = document.getElementById('chart-cc-donut');
+      if (dc) {
+        dc.style.height = '180px';
+        const chart = new G2.Chart({ container: dc, autoFit: true, height: 180 });
+        chart.options({ type: 'interval', data: donutData, encode: { y: 'count', color: 'status' }, transform: [{ type: 'stackY' }], coordinate: { type: 'theta', outerRadius: 0.8, innerRadius: 0.5 }, legend: { color: { position: 'right', layout: { justifyContent: 'center' } } } });
+        chart.render();
+      }
+    }
+
+    // 3. Longest Path (Critical Activities by WBS)
+    const wbsCritCounts = {};
+    variances.filter(a => a.is_critical).forEach(a => {
+      const w = a.wbs_name || 'Ungrouped';
+      wbsCritCounts[w] = (wbsCritCounts[w] || 0) + 1;
+    });
+    const lpData = Object.entries(wbsCritCounts)
+      .sort((a,b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([wbs, count]) => ({ wbs: wbs.slice(0, 15), count }));
+    if (lpData.length) renderG2HBar('chart-cc-lp', lpData, 'wbs', 'count', 180);
+
+    // 4. Procurement Status (Histogram style)
+    const pSum = (D.procurement || {}).summary || {};
+    const procData = [
+      { status: 'Complete', count: pSum.complete || 0 },
+      { status: 'In Progress', count: pSum.in_progress || 0 },
+      { status: 'Not Started', count: pSum.not_started || 0 },
+      { status: 'Late', count: pSum.late || 0 }
+    ].filter(d => d.count > 0);
+    if (procData.length) renderG2Bar('chart-cc-proc', procData, 'status', 'count', 'status', 200);
+
+    // 8. Logic integrity bar
+    const logicData = [
+      { type: 'Added',   count: S.relationships_added   || 0 },
+      { type: 'Deleted', count: S.relationships_deleted || 0 },
+      { type: 'Changed', count: S.relationships_changed || 0 },
+    ].filter(d => d.count > 0);
+    if (logicData.length) renderG2Bar('chart-cc-logic', logicData, 'type', 'count', 'type', 160);
+
+    // 9. Milestone Status donut
+    const msCounts = { on_track: 0, at_risk: 0, late: 0, complete: 0 };
+    milestones.forEach(m => { if (msCounts[m.status] != null) msCounts[m.status]++; });
+    const msData = Object.entries(msCounts).map(([s, c]) => ({ status: s, count: c })).filter(d => d.count > 0);
+    if (msData.length) {
+      const mc = document.getElementById('chart-cc-ms');
+      if (mc) {
+        mc.style.height = '180px';
+        const chart = new G2.Chart({ container: mc, autoFit: true, height: 180 });
+        chart.options({ type: 'interval', data: msData, encode: { y: 'count', color: 'status' }, transform: [{ type: 'stackY' }], coordinate: { type: 'theta', outerRadius: 0.8, innerRadius: 0.5 }, legend: { color: { position: 'right' } } });
+        chart.render();
+      }
+    }
+
+    // 10. WBS distribution bar (top 8 by activity count approximated by wbs_level 1 nodes)
+    const wbsTop = wbsRows.filter(w => w.wbs_level === 1 || w.wbs_level === '1').slice(0, 8);
+    if (wbsTop.length) {
+      const wbsData = wbsTop.map(w => ({ name: (w.wbs_name||'').slice(0, 16), cost: parseFloat(w.total_planned_cost) || 0 }));
+      renderG2HBar('chart-cc-wbs', wbsData, 'name', 'cost', 180);
+    }
+
+  }, 50);
 }
 
-function renderSchedRows(append = false) {
-  const tbody = document.getElementById('sched-tbody');
-  const countEl = document.getElementById('sched-count');
-  const bar = document.getElementById('load-more-bar');
-  if (!tbody) return;
 
-  const start = append ? schedPage * PAGE_SIZE : 0;
-  const slice = schedFiltered.slice(start, start + PAGE_SIZE);
+/* ── Tab 2: Schedule ─────────────────────────────────────────────────────── */
 
-  const html = slice.map(v => `<tr>
-    <td><code>${esc(v.task_code)}</code></td>
-    <td>${esc(v.task_name)}</td>
-    <td>${esc(v.wbs_name)}</td>
-    <td>${esc(fmtDate(v.baseline_finish))}</td>
-    <td>${esc(fmtDate(v.updated_finish))}</td>
-    <td>${varCell(v.start_variance_days)}</td>
-    <td>${varCell(v.finish_variance_days)}</td>
-    <td>${varCell(v.duration_variance_days)}</td>
-    <td>${changeBadge(v.change_type)}</td>
-  </tr>`).join('');
+function renderSchedule(el) {
+  const variances = D.activity_variances || [];
 
-  if (append) tbody.insertAdjacentHTML('beforeend', html);
-  else { tbody.innerHTML = html; if (countEl) countEl.textContent = schedFiltered.length + ' activities'; }
+  // Build top-20 delay chart data
+  const top20 = variances
+    .filter(a => (a.finish_variance_days || 0) > 0)
+    .sort((a, b) => (b.finish_variance_days || 0) - (a.finish_variance_days || 0))
+    .slice(0, 20);
 
-  if (bar) bar.style.display = (schedPage + 1) * PAGE_SIZE < schedFiltered.length ? 'flex' : 'none';
+  const PAGE = 200;
+
+  function buildRows(items) {
+    return items.map(a => `
+    <tr data-testid="activity-row" class="row-${a.change_type || 'unchanged'}${a.is_critical ? ' row-critical' : ''}">
+      <td>${esc(a.task_code)}</td>
+      <td>${esc(a.task_name)}</td>
+      <td>${esc(a.wbs_name)}</td>
+      <td><span class="status-badge status-${a.change_type || 'unchanged'}">${esc(a.change_type || '—')}</span></td>
+      <td class="num">${a.start_variance_days != null ? fmt(a.start_variance_days, 1) + 'd' : '—'}</td>
+      <td class="num">${a.finish_variance_days != null ? fmt(a.finish_variance_days, 1) + 'd' : '—'}</td>
+      <td class="num">${a.duration_variance_days != null ? fmt(a.duration_variance_days, 1) + 'd' : '—'}</td>
+      <td class="num">${a.pct_complete_change != null ? fmt(a.pct_complete_change, 1) + '%' : '—'}</td>
+      <td class="num">${a.float_change_hours != null ? fmt(a.float_change_hours, 1) + 'h' : '—'}</td>
+      <td>${esc(a.new_status || a.old_status || '—')}</td>
+      <td>${a.is_critical ? '<span class="tag-chip tag-critical">Critical</span>' : ''}</td>
+    </tr>`).join('');
+  }
+
+  const initialRows = buildRows(variances.slice(0, PAGE));
+  const hasMore = variances.length > PAGE;
+
+  el.innerHTML = `
+    <div class="filter-row">
+      <label for="sched-search" class="sr-only">Search activities</label>
+      <input type="search" class="search-input" id="sched-search" placeholder="Search code or name…" aria-label="Search activities">
+      <label for="sched-filter" class="sr-only">Filter by change type</label>
+      <select class="filter-select" id="sched-filter" aria-label="Filter by change type">
+        <option value="">All Changes</option>
+        <option value="added">Added</option>
+        <option value="deleted">Deleted</option>
+        <option value="changed">Changed</option>
+        <option value="unchanged">Unchanged</option>
+      </select>
+    </div>
+
+    <div class="chart-container" style="margin-bottom:24px;">
+      <h2 class="section-title">Top 20 Delayed Activities</h2>
+      <div id="chart-delay"></div>
+    </div>
+
+    <div class="table-wrap" id="sched-table-wrap">
+      <table class="data-table" id="sched-table">
+        <thead>
+          <tr>
+            <th>Code</th><th>Name</th><th>WBS</th><th>Change</th>
+            <th class="num">Start Var</th><th class="num">Finish Var</th>
+            <th class="num">Dur Var</th><th class="num">% Chg</th>
+            <th class="num">Float Chg</th><th>Status</th><th>Critical</th>
+          </tr>
+        </thead>
+        <tbody id="sched-tbody">
+          ${initialRows}
+        </tbody>
+      </table>
+    </div>
+    ${hasMore ? `<div style="text-align:center;padding:16px;"><button class="btn-primary" id="sched-load-more">Load more (${variances.length - PAGE} remaining)</button></div>` : ''}
+  `;
+
+  // Wire up filtering
+  const searchEl  = document.getElementById('sched-search');
+  const filterEl  = document.getElementById('sched-filter');
+
+  function applyFilter() {
+    const q   = searchEl.value.toLowerCase();
+    const typ = filterEl.value;
+    Array.from(document.querySelectorAll('#sched-tbody tr[data-testid="activity-row"]')).forEach(row => {
+      const text = row.textContent.toLowerCase();
+      const matchQ   = !q   || text.includes(q);
+      const matchTyp = !typ || row.classList.contains('row-' + typ);
+      row.style.display = (matchQ && matchTyp) ? '' : 'none';
+    });
+  }
+  let _debTimer;
+  searchEl.addEventListener('input', () => { clearTimeout(_debTimer); _debTimer = setTimeout(applyFilter, 150); });
+  filterEl.addEventListener('change', applyFilter);
+
+  // Load more
+  const loadMoreBtn = document.getElementById('sched-load-more');
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', () => {
+      document.getElementById('sched-tbody').innerHTML = buildRows(variances);
+      loadMoreBtn.parentElement.remove();
+    });
+  }
+
+  // Render delay chart
+  setTimeout(() => {
+    const chartData = top20.map(a => ({
+      code: (a.task_code || '').slice(0, 12),
+      days: parseFloat(a.finish_variance_days) || 0,
+    }));
+    renderG2HBar('chart-delay', chartData, 'code', 'days', 300);
+  }, 0);
 }
 
-/* ── Milestones ──────────────────────────────────────────────────────────── */
-RENDERERS.milestones = function renderMilestones() {
-  const el = document.getElementById('page-milestones');
-  const miles = D.milestones || [];
-  if (!miles.length) {
-    el.innerHTML = `<div class="card"><div class="card-bd empty-state">No milestone data found in this schedule.</div></div>`;
+/* ── Tab 3: KPIs ─────────────────────────────────────────────────────────── */
+
+function renderKPIs(el) {
+  const K = D.kpis || {};
+
+  function colorForFloat(v) {
+    if (v == null) return 'blue';
+    if (v > 5) return 'red';
+    if (v >= 1) return 'orange';
+    return 'green';
+  }
+  function colorForPct(v) {
+    if (v == null) return 'blue';
+    if (v > 60) return 'green';
+    if (v >= 30) return 'orange';
+    return 'red';
+  }
+  function colorForSPI(v) {
+    if (v == null) return 'blue';
+    if (v >= 1.0) return 'green';
+    if (v >= 0.8) return 'orange';
+    return 'red';
+  }
+  function colorForDelay(v) {
+    if (v == null) return 'blue';
+    if (v <= 0) return 'green';
+    if (v <= 14) return 'orange';
+    return 'red';
+  }
+
+  const floatColor = colorForFloat(K.float_consumption_days);
+  const pctColor   = colorForPct(K.pct_complete_weighted);
+  const spiColor   = colorForSPI(K.spi_duration);
+  const delayColor = colorForDelay(K.schedule_delay_days);
+
+  const onTimeStart  = K.on_time_start_rate  != null ? fmt(K.on_time_start_rate * 100, 1)  + '%' : '—';
+  const onTimeFinish = K.on_time_finish_rate != null ? fmt(K.on_time_finish_rate * 100, 1) + '%' : '—';
+
+  const kpiChartData = [
+    { metric: 'Float Consumed (d)', value: K.float_consumption_days  || 0 },
+    { metric: 'SPI Duration',       value: K.spi_duration            || 0 },
+    { metric: 'Delay (d)',          value: K.schedule_delay_days     || 0 },
+    { metric: 'Near Critical',      value: K.near_critical_count     || 0 },
+    { metric: 'Behind',             value: K.activities_behind       || 0 },
+    { metric: 'Improved',           value: K.activities_improved     || 0 },
+  ].filter(d => d.value !== 0);
+
+  el.innerHTML = `
+    <h2 class="section-title">Schedule Performance</h2>
+    <div class="kpi-panel">
+      <div class="kpi-row">
+        <div class="kpi-name">Float Consumption</div>
+        <div class="kpi-figure kpi-${floatColor}">${K.float_consumption_days != null ? fmt(K.float_consumption_days, 1) + 'd' : '—'}</div>
+        <div class="kpi-context">avg days consumed since baseline</div>
+        <div class="kpi-status kpi-${floatColor}">${K.float_consumption_days > 5 ? '↑ High' : K.float_consumption_days >= 1 ? '↑ Moderate' : '✓ Low'}</div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi-name">Weighted % Complete</div>
+        <div class="kpi-figure kpi-${pctColor}">${K.pct_complete_weighted != null ? fmt(K.pct_complete_weighted, 1) + '%' : '—'}</div>
+        <div class="kpi-context">duration-weighted progress across all activities</div>
+        <div class="kpi-status kpi-${pctColor}">${K.pct_complete_weighted > 60 ? '✓ On track' : K.pct_complete_weighted >= 30 ? '— Moderate' : '↓ Low'}</div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi-name">SPI (Duration)</div>
+        <div class="kpi-figure kpi-${spiColor}">${K.spi_duration != null ? fmt(K.spi_duration, 3) : '—'}</div>
+        <div class="kpi-context">earned duration ÷ planned duration — ≥1.0 is on schedule</div>
+        <div class="kpi-status kpi-${spiColor}">${K.spi_duration >= 1.0 ? '✓ On schedule' : K.spi_duration >= 0.8 ? '↓ Slipping' : '↓↓ Critical'}</div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi-name">Schedule Delay</div>
+        <div class="kpi-figure kpi-${delayColor}">${K.schedule_delay_days != null ? fmt(K.schedule_delay_days, 0) + 'd' : '—'}</div>
+        <div class="kpi-context">net delay of updated plan-end vs baseline plan-end</div>
+        <div class="kpi-status kpi-${delayColor}">${K.schedule_delay_days <= 0 ? '✓ No delay' : K.schedule_delay_days <= 14 ? '↑ Minor' : '↑↑ Significant'}</div>
+      </div>
+    </div>
+
+    <div class="stats-grid" style="margin-top:24px;">
+      <div class="stat-card">
+        <div class="stat-num stat-num-blue">${K.avg_float_days != null ? fmt(K.avg_float_days, 1) + 'd' : '—'}</div>
+        <div class="stat-label">Avg Float</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-orange">${K.near_critical_count != null ? K.near_critical_count : '—'}</div>
+        <div class="stat-label">Near Critical</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-blue">${onTimeStart}</div>
+        <div class="stat-label">On-Time Start</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-blue">${onTimeFinish}</div>
+        <div class="stat-label">On-Time Finish</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-red">${K.activities_behind != null ? K.activities_behind : '—'}</div>
+        <div class="stat-label">Behind</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-green">${K.activities_improved != null ? K.activities_improved : '—'}</div>
+        <div class="stat-label">Improved</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-green">${K.activities_on_track != null ? K.activities_on_track : '—'}</div>
+        <div class="stat-label">On Track</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-blue">${K.total_activities != null ? K.total_activities : '—'}</div>
+        <div class="stat-label">Total</div>
+      </div>
+    </div>
+
+    <div class="chart-container" style="margin-top:24px;">
+      <h2 class="section-title">KPI Overview</h2>
+      <div id="chart-kpi"></div>
+    </div>
+  `;
+
+  setTimeout(() => {
+    if (kpiChartData.length) renderG2Bar('chart-kpi', kpiChartData, 'metric', 'value', null, 260);
+  }, 0);
+}
+
+/* ── Tab 4: Lookahead ────────────────────────────────────────────────────── */
+
+function renderLookahead(el) {
+  const LA = D.lookahead || {};
+  const counts = LA.counts || {};
+
+  const windows = [
+    { key: 'overdue',   label: 'Overdue',  items: LA.overdue   || [] },
+    { key: 'two_week',  label: '2-Week',   items: LA.two_week  || [] },
+    { key: 'four_week', label: '4-Week',   items: LA.four_week || [] },
+    { key: 'six_week',  label: '6-Week',   items: LA.six_week  || [] },
+  ];
+
+  const defaultWindow = (LA.overdue && LA.overdue.length > 0) ? 'overdue' : 'two_week';
+
+  const toggleHtml = windows.map(w => `
+    <button class="toggle-btn${w.key === defaultWindow ? ' active' : ''}"
+            data-window="${w.key}">
+      ${w.label} <span class="badge-count">${w.items.length}</span>
+    </button>`).join('');
+
+  el.innerHTML = `
+    <h2 class="section-title">Schedule Lookahead</h2>
+    <div class="lookahead-toggle" id="la-toggle">
+      ${toggleHtml}
+    </div>
+    <div id="la-table-wrap"></div>
+  `;
+
+  function renderWindow(key) {
+    const win    = windows.find(w => w.key === key);
+    const items  = win ? win.items : [];
+    const wrap   = document.getElementById('la-table-wrap');
+
+    // Group by WBS
+    const groups = {};
+    items.forEach(item => {
+      const g = item.wbs_name || 'Ungrouped';
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(item);
+    });
+
+    let rows = '';
+    if (items.length === 0) {
+      rows = `<tr><td colspan="10" class="no-data">No activities in this window</td></tr>`;
+    } else {
+      Object.entries(groups).forEach(([wbsName, groupItems]) => {
+        rows += `<tr class="wbs-group-row"><td colspan="10">${esc(wbsName)}</td></tr>`;
+        rows += groupItems.map(a => `
+          <tr data-testid="activity-row" class="${a.is_critical ? 'row-critical' : ''}">
+            <td>${esc(a.task_code)}</td>
+            <td>${esc(a.task_name)}</td>
+            <td>${esc(a.wbs_name)}</td>
+            <td>${fmtDate(a.planned_start)}</td>
+            <td>${fmtDate(a.planned_finish)}</td>
+            <td class="num">${a.duration_days != null ? fmt(a.duration_days, 0) + 'd' : '—'}</td>
+            <td class="num">${a.pct_complete != null ? fmt(a.pct_complete, 0) + '%' : '—'}</td>
+            <td class="num">${a.float_days != null ? fmt(a.float_days, 1) + 'd' : '—'}</td>
+            <td>${esc(a.status || '—')}</td>
+            <td>${a.is_critical ? '<span class="tag-chip tag-critical">Critical</span>' : ''}</td>
+          </tr>`).join('');
+      });
+    }
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Code</th><th>Name</th><th>WBS</th>
+            <th>Start</th><th>Finish</th>
+            <th class="num">Duration</th><th class="num">% Comp</th>
+            <th class="num">Float</th><th>Status</th><th>Critical</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  // Toggle handlers
+  document.getElementById('la-toggle').addEventListener('click', e => {
+    const btn = e.target.closest('.toggle-btn');
+    if (!btn) return;
+    document.querySelectorAll('#la-toggle .toggle-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderWindow(btn.dataset.window);
+  });
+
+  renderWindow(defaultWindow);
+}
+
+/* ── Tab 5: Milestones ───────────────────────────────────────────────────── */
+
+function renderMilestones(el) {
+  const milestones = D.milestones || [];
+
+  // Count by status
+  const counts = { complete: 0, on_track: 0, at_risk: 0, late: 0 };
+  milestones.forEach(m => { if (counts[m.status] != null) counts[m.status]++; });
+
+  // Sort: late first, at_risk, on_track, complete
+  const order = { late: 0, at_risk: 1, on_track: 2, complete: 3, unknown: 4 };
+  const sorted = [...milestones].sort((a, b) => (order[a.status] || 4) - (order[b.status] || 4));
+
+  const rows = sorted.map(m => `
+    <tr data-testid="activity-row" class="row-${m.change_type || 'unchanged'}">
+      <td>${esc(m.task_code)}</td>
+      <td>${esc(m.task_name)}</td>
+      <td>${esc(m.wbs_name)}</td>
+      <td>${fmtDate(m.baseline_finish)}</td>
+      <td>${fmtDate(m.updated_finish)}</td>
+      <td>${fmtDate(m.actual_finish)}</td>
+      <td class="num">${m.finish_variance_days != null ? fmt(m.finish_variance_days, 0) + 'd' : '—'}</td>
+      <td class="num">${m.pct_complete != null ? fmt(m.pct_complete, 0) + '%' : '—'}</td>
+      <td><span class="status-badge status-${m.status || 'unknown'}">${esc(m.status || 'unknown')}</span></td>
+    </tr>`).join('');
+
+  el.innerHTML = `
+    <h2 class="section-title">Milestones</h2>
+    <div class="chips-row">
+      <span class="tag-chip">Total: ${milestones.length}</span>
+      <span class="tag-chip tag-complete">Complete: ${counts.complete}</span>
+      <span class="tag-chip tag-on-track">On Track: ${counts.on_track}</span>
+      <span class="tag-chip tag-at-risk">At Risk: ${counts.at_risk}</span>
+      <span class="tag-chip tag-late">Late: ${counts.late}</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Code</th><th>Name</th><th>WBS</th>
+            <th>Baseline Finish</th><th>Updated Finish</th><th>Actual Finish</th>
+            <th class="num">Variance</th><th class="num">%</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.length ? rows : '<tr><td colspan="9" class="no-data">No milestones found</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+/* ── Tab 6: Procurement ──────────────────────────────────────────────────── */
+
+function renderProcurement(el) {
+  const P = D.procurement || {};
+  const items = P.items || [];
+  const detected = P.detected_wbs_nodes || [];
+  const summary  = P.summary || {};
+
+  if (detected.length === 0) {
+    el.innerHTML = `
+      <h2 class="section-title">Procurement</h2>
+      <div class="info-card">
+        <strong>No procurement WBS nodes detected</strong>
+        <p>No WBS nodes matching typical procurement patterns were found in the schedules.</p>
+      </div>`;
     return;
   }
-  const rows = miles.map(m => {
-    const v = parseFloat(m.variance_days) || 0;
-    const cls = v > 14 ? 'badge-red' : v > 0 ? 'badge-amber' : 'badge-green';
-    const lbl = v > 14 ? 'At Risk' : v > 0 ? 'Slipped' : 'On Track';
-    return `<tr>
-      <td><code>${esc(m.task_code || '')}</code></td>
-      <td>${esc(m.task_name || '')}</td>
-      <td>${esc(fmtDate(m.baseline_finish))}</td>
-      <td>${esc(fmtDate(m.updated_finish))}</td>
-      <td>${varCell(v)}</td>
-      <td><span class="badge ${esc(cls)}">${esc(lbl)}</span></td>
+
+  const wbsChips = detected.map(n => `<span class="tag-chip">${esc(n)}</span>`).join('');
+
+  const rows = items.map(item => {
+    const typeTag = item.is_long_lead
+      ? '<span class="tag-chip tag-long-lead">Long Lead</span>'
+      : item.is_short_lead
+        ? '<span class="tag-chip tag-short-lead">Short Lead</span>'
+        : '—';
+    return `
+    <tr data-testid="activity-row">
+      <td>${esc(item.task_code)}</td>
+      <td>${esc(item.task_name)}</td>
+      <td>${esc(item.wbs_name)}</td>
+      <td>${fmtDate(item.baseline_finish)}</td>
+      <td>${fmtDate(item.updated_finish)}</td>
+      <td class="num">${item.finish_variance_days != null ? fmt(item.finish_variance_days, 0) + 'd' : '—'}</td>
+      <td class="num">${item.pct_complete != null ? fmt(item.pct_complete, 0) + '%' : '—'}</td>
+      <td><span class="status-badge status-${item.status || 'unknown'}">${esc(item.status || '—')}</span></td>
+      <td>${typeTag}</td>
     </tr>`;
   }).join('');
-  el.innerHTML = `<div class="card">
-    <div class="card-hd">Milestones (${miles.length})</div>
-    <div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th>ID</th><th>Name</th><th>BL Finish</th><th>Upd Finish</th><th>Variance</th><th>Status</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>
-  </div>`;
-};
 
-/* ── Lookahead ────────────────────────────────────────────────────────────── */
-let laWindow = 30;
-RENDERERS.lookahead = function renderLookahead() {
-  const el = document.getElementById('page-lookahead');
   el.innerHTML = `
-    <div class="toolbar">
-      <span style="font-size:.875rem;font-weight:600;color:var(--muted)">Window:</span>
-      ${[30,60,90].map(d => `<button class="btn lookahead-chip${d===30?' active':''}" data-days="${d}">${d} Days</button>`).join('')}
-      <span class="count-chip" id="la-count" aria-live="polite"></span>
+    <h2 class="section-title">Procurement</h2>
+    <div class="chips-row" style="margin-bottom:12px;">
+      <strong>Detected WBS Nodes:</strong> ${wbsChips}
     </div>
-    <div class="card">
-      <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>ID</th><th>Activity Name</th><th>WBS</th><th>Start</th><th>Finish</th><th>Duration</th><th>Status</th></tr></thead>
-        <tbody id="la-tbody" aria-live="polite"></tbody>
-      </table></div>
-    </div>`;
-  document.querySelectorAll('.lookahead-chip').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.lookahead-chip').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      laWindow = parseInt(btn.dataset.days);
-      renderLARows();
-    });
-  });
-  renderLARows();
-};
-function renderLARows() {
-  const all = D.lookahead || [];
-  const filtered = all.filter(a => (a.days_to_start == null || a.days_to_start <= laWindow));
-  const countEl = document.getElementById('la-count');
-  if (countEl) countEl.textContent = filtered.length + ' activities';
-  const tbody = document.getElementById('la-tbody');
-  if (!tbody) return;
-  tbody.innerHTML = filtered.length ? filtered.map(a => `<tr>
-    <td><code>${esc(a.task_code || '')}</code></td>
-    <td>${esc(a.task_name || '')}</td>
-    <td>${esc(a.wbs_name || '')}</td>
-    <td>${esc(fmtDate(a.planned_start))}</td>
-    <td>${esc(fmtDate(a.planned_finish))}</td>
-    <td>${a.duration_days != null ? esc(a.duration_days + 'd') : '—'}</td>
-    <td>${statusBadge(a.status_code || '')}</td>
-  </tr>`).join('') : `<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:2rem">No activities starting in next ${laWindow} days</td></tr>`;
+    <div class="stats-grid" style="margin-bottom:24px;">
+      <div class="stat-card">
+        <div class="stat-num stat-num-blue">${summary.total || 0}</div>
+        <div class="stat-label">Total</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-green">${summary.complete || 0}</div>
+        <div class="stat-label">Complete</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-orange">${summary.in_progress || 0}</div>
+        <div class="stat-label">In Progress</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-muted">${summary.not_started || 0}</div>
+        <div class="stat-label">Not Started</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num stat-num-red">${summary.late || 0}</div>
+        <div class="stat-label">Late</div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Code</th><th>Name</th><th>WBS</th>
+            <th>Baseline Finish</th><th>Updated Finish</th>
+            <th class="num">Variance</th><th class="num">%</th>
+            <th>Status</th><th>Type</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.length ? rows : '<tr><td colspan="9" class="no-data">No procurement items found</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
-/* ── Earned Value ─────────────────────────────────────────────────────────── */
-RENDERERS.ev = function renderEV() {
-  const el = document.getElementById('page-ev');
+/* ── Tab 7: Earned Value ─────────────────────────────────────────────────── */
+
+function renderEV(el) {
   const ev = D.ev || {};
+  const K  = D.kpis || {};
+
   if (!ev.has_cost_data) {
-    el.innerHTML = `<div class="card"><div class="card-bd empty-state">
-      No cost data found. EV metrics require resource cost assignments in the XER file.
-    </div></div>`;
+    el.innerHTML = `
+      <h2 class="section-title">Earned Value</h2>
+      <div class="info-card">
+        <strong>No cost data found in the XER files</strong>
+        <p>EV analysis requires cost-loaded activities. Showing duration-based schedule metrics instead.</p>
+      </div>
+      <div class="kpi-grid" style="margin-top:24px;">
+        <div class="kpi-card">
+          <div class="kpi-val kpi-blue">${K.spi_duration != null ? fmt(K.spi_duration, 2) : '—'}</div>
+          <div class="kpi-label">SPI (Duration)</div>
+          <div class="kpi-desc">Duration-based schedule performance index</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-val kpi-blue">${K.pct_complete_weighted != null ? fmt(K.pct_complete_weighted, 1) + '%' : '—'}</div>
+          <div class="kpi-label">Weighted % Complete</div>
+          <div class="kpi-desc">Duration-weighted progress</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-val kpi-blue">${K.schedule_delay_days != null ? fmt(K.schedule_delay_days, 0) + 'd' : '—'}</div>
+          <div class="kpi-label">Schedule Delay</div>
+          <div class="kpi-desc">Net delay vs baseline</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-val kpi-blue">${K.float_consumption_days != null ? fmt(K.float_consumption_days, 1) + 'd' : '—'}</div>
+          <div class="kpi-label">Float Consumption</div>
+          <div class="kpi-desc">Average float consumed</div>
+        </div>
+      </div>`;
     return;
   }
-  const u = ev.updated || {};
-  const cpi = parseFloat(u.CPI);
-  const spi = parseFloat(u.SPI);
-  const kpis = `<div class="kpi-row">
-    ${kpiCard('CPI', fmt(u.CPI, 2), 'Cost Performance Index', cpi >= 1 ? '--green' : '--red')}
-    ${kpiCard('SPI', fmt(u.SPI, 2), 'Schedule Performance Index', spi >= 1 ? '--green' : '--red')}
-    ${kpiCard('BAC', fmtCost(u.BAC), 'Budget at Completion', '--blue')}
-    ${kpiCard('EAC', fmtCost(u.EAC), 'Estimate at Completion', parseFloat(u.EAC) <= parseFloat(u.BAC) ? '--green' : '--red')}
-  </div>`;
-  const evKpis = (D.kpis || []).filter(k => ['CPI','SPI','BCWP','ACWP','PV','EV','AC','CV','SV'].includes(k.name));
-  const rows = evKpis.map(k => `<tr>
-    <td>${esc(k.label || k.name)}</td>
-    <td><strong>${esc(k.value != null ? String(k.value) : '—')}</strong></td>
-    <td>${esc(k.benchmark || '—')}</td>
-    <td>${k.status ? badge(k.status === 'good' ? 'green' : k.status === 'warning' ? 'amber' : 'red', k.status) : '—'}</td>
-  </tr>`).join('');
-  el.innerHTML = kpis + `<div class="card">
-    <div class="card-hd">EV Metrics Detail</div>
-    <div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th>Metric</th><th>Value</th><th>Benchmark</th><th>Status</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:2rem">No EV metrics available</td></tr>'}</tbody>
-    </table></div>
-  </div>`;
-};
 
-/* ── Logic / Relationships ────────────────────────────────────────────────── */
-RENDERERS.logic = function renderLogic() {
-  const el = document.getElementById('page-logic');
+  const upd = ev.updated || {};
+  const bas = ev.baseline || {};
+
+  const fmtCost = v => v != null ? '$' + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—';
+  const fmtIdx  = v => v != null ? fmt(v, 3) : '—';
+
+  el.innerHTML = `
+    <h2 class="section-title">Earned Value Analysis</h2>
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-val kpi-blue">${fmtCost(bas.BAC || upd.BAC)}</div>
+        <div class="kpi-label">BAC</div>
+        <div class="kpi-desc">Budget at Completion</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-val kpi-blue">${fmtCost(upd.EV)}</div>
+        <div class="kpi-label">EV</div>
+        <div class="kpi-desc">Earned Value</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-val kpi-blue">${fmtCost(upd.AC)}</div>
+        <div class="kpi-label">AC</div>
+        <div class="kpi-desc">Actual Cost</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-val kpi-${upd.SPI >= 1 ? 'green' : upd.SPI >= 0.8 ? 'orange' : 'red'}">${fmtIdx(upd.SPI)}</div>
+        <div class="kpi-label">SPI</div>
+        <div class="kpi-desc">Schedule Performance Index</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-val kpi-${upd.CPI >= 1 ? 'green' : upd.CPI >= 0.8 ? 'orange' : 'red'}">${fmtIdx(upd.CPI)}</div>
+        <div class="kpi-label">CPI</div>
+        <div class="kpi-desc">Cost Performance Index</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-val kpi-blue">${fmtCost(upd.EAC)}</div>
+        <div class="kpi-label">EAC</div>
+        <div class="kpi-desc">Estimate at Completion</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-val kpi-${(upd.VAC || 0) >= 0 ? 'green' : 'red'}">${fmtCost(upd.VAC)}</div>
+        <div class="kpi-label">VAC</div>
+        <div class="kpi-desc">Variance at Completion</div>
+      </div>
+    </div>
+
+    <div class="chart-container" style="margin-top:24px;">
+      <h2 class="section-title">S-Curve</h2>
+      <div id="chart-scurve"></div>
+    </div>
+  `;
+
+  setTimeout(() => {
+    const scurve = D.scurve || {};
+    const scBase = (scurve.baseline || []).map(p => ([
+      { period: fmtDate(p.period_date), value: p.planned_cum_cost||0, series: 'Baseline Planned (Cum)' },
+      { period: fmtDate(p.period_date), value: p.planned_periodic_cost||0, series: 'Baseline Monthly' }
+    ])).flat();
+    const scUpd  = (scurve.updated  || []).map(p => ([
+      { period: fmtDate(p.period_date), value: p.actual_cum_cost||0, series: 'Actual (Cum)' },
+      { period: fmtDate(p.period_date), value: p.actual_periodic_cost||0, series: 'Actual Monthly' }
+    ])).flat();
+    const combined = [...scBase, ...scUpd];
+    if (combined.length) renderG2Combo('chart-scurve', combined, 'period', 320);
+  }, 0);
+}
+
+/* ── Tab 8: WBS ──────────────────────────────────────────────────────────── */
+
+function renderWBS(el) {
+  const wbs = D.wbs_summary || [];
+
+  if (wbs.length === 0) {
+    el.innerHTML = `
+      <h2 class="section-title">WBS Summary</h2>
+      <div class="info-card"><p>No WBS data available.</p></div>`;
+    return;
+  }
+
+  // Discover columns from first row
+  const sampleKeys = Object.keys(wbs[0] || {});
+
+  const headers = sampleKeys.map(k => `<th>${esc(k.replace(/_/g, ' '))}</th>`).join('');
+
+  const rows = wbs.map(row => `
+    <tr data-testid="activity-row">
+      ${sampleKeys.map(k => `<td>${esc(row[k])}</td>`).join('')}
+    </tr>`).join('');
+
+  el.innerHTML = `
+    <h2 class="section-title">WBS Summary</h2>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr>${headers}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+/* ── Tab 9: Logic (Relationships) ────────────────────────────────────────── */
+
+function renderLogic(el) {
   const rels = D.relationship_variances || [];
-  if (!rels.length) {
-    el.innerHTML = `<div class="card"><div class="card-bd empty-state">No relationship changes detected between the two schedules.</div></div>`;
-    return;
-  }
-  const added   = rels.filter(r => r.change_type === 'added').length;
-  const deleted  = rels.filter(r => r.change_type === 'deleted').length;
-  const changed  = rels.filter(r => r.change_type === 'changed').length;
-  const rows = rels.map(r => `<tr>
-    <td><code>${esc(r.pred_code)}</code></td>
-    <td><code>${esc(r.succ_code)}</code></td>
-    <td>${esc(r.old_pred_type || '—')}</td>
-    <td>${esc(r.new_pred_type || '—')}</td>
-    <td>${r.lag_change_hours ? varCell(r.lag_change_hours / 8) : '—'}</td>
-    <td>${changeBadge(r.change_type)}</td>
-  </tr>`).join('');
-  el.innerHTML = `<div class="kpi-row" style="grid-template-columns:repeat(3,1fr)">
-    ${kpiCard('Added', added, 'new relationships', '--green')}
-    ${kpiCard('Deleted', deleted, 'removed relationships', '--red')}
-    ${kpiCard('Changed', changed, 'modified relationships', '--amber')}
-  </div>
-  <div class="card">
-    <div class="card-hd">Relationship Changes (${rels.length})</div>
-    <div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th>Predecessor</th><th>Successor</th><th>Old Type</th><th>New Type</th><th>Lag Change</th><th>Change</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>
-  </div>`;
-};
 
-/* ── Chat FAB ─────────────────────────────────────────────────────────────── */
-function initChat() {
-  const fab    = document.getElementById('chat-fab');
-  const modal  = document.getElementById('chat-modal');
-  const close  = document.getElementById('chat-close');
-  const input  = document.getElementById('chat-input');
-  const send   = document.getElementById('chat-send');
-  const msgs   = document.getElementById('chat-messages');
-  if (!fab || !modal) return;
+  const countAdded   = rels.filter(r => r.change_type === 'added').length;
+  const countDeleted = rels.filter(r => r.change_type === 'deleted').length;
+  const countChanged = rels.filter(r => r.change_type === 'changed').length;
 
-  function openChat() { modal.classList.add('open'); input.focus(); }
-  function closeChat() { modal.classList.remove('open'); }
+  const rows = rels.map(r => `
+    <tr data-testid="activity-row" class="row-${r.change_type || 'unchanged'}">
+      <td>${esc(r.pred_code)}</td>
+      <td>${esc(r.succ_code)}</td>
+      <td><span class="status-badge status-${r.change_type || 'unchanged'}">${esc(r.change_type || '—')}</span></td>
+      <td>${esc(r.old_pred_type || '—')}</td>
+      <td>${esc(r.new_pred_type || '—')}</td>
+      <td class="num">${r.lag_change_hours != null ? fmt(r.lag_change_hours, 1) + 'h' : '—'}</td>
+    </tr>`).join('');
 
-  fab.addEventListener('click', () => modal.classList.contains('open') ? closeChat() : openChat());
-  fab.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fab.click(); } });
-  close.addEventListener('click', closeChat);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && modal.classList.contains('open')) closeChat(); });
+  el.innerHTML = `
+    <h2 class="section-title">Relationship / Logic Changes</h2>
+    <div class="chips-row" style="margin-bottom:16px;">
+      <span class="tag-chip tag-added">Added: ${countAdded}</span>
+      <span class="tag-chip tag-deleted">Deleted: ${countDeleted}</span>
+      <span class="tag-chip tag-changed">Changed: ${countChanged}</span>
+      <span class="tag-chip">Total: ${rels.length}</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Pred Code</th><th>Succ Code</th><th>Change</th>
+            <th>Old Type</th><th>New Type</th><th class="num">Lag Change (h)</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.length ? rows : '<tr><td colspan="6" class="no-data">No relationship changes</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
 
-  function appendMsg(role, text) {
+/* ── Tab 10: AI Chat ─────────────────────────────────────────────────────── */
+
+function renderChat(el) {
+  const projectName = (D.project && D.project.updated_name) || 'this schedule';
+
+  const suggestions = [
+    `What are the top schedule risks?`,
+    `Which activities are most delayed?`,
+    `What is the overall schedule health?`,
+  ];
+
+  const suggestionChips = suggestions.map(s =>
+    `<button class="suggestion-chip" data-question="${esc(s)}">${esc(s)}</button>`
+  ).join('');
+
+  el.innerHTML = `
+    <h2 class="section-title">AI Schedule Assistant</h2>
+    <div class="chat-container">
+      <div class="chat-messages" id="chat-messages" aria-live="polite" aria-atomic="false">
+        <div class="chat-msg msg-ai">
+          <strong>Assistant:</strong> I'm analyzing <em>${esc(projectName)}</em>. Ask me anything about the schedule comparison.
+        </div>
+      </div>
+      <div class="suggestions" id="chat-suggestions">
+        ${suggestionChips}
+      </div>
+      <div class="chat-input-row">
+        <input type="text" class="chat-input" id="chat-input" placeholder="Ask about the schedule…" autocomplete="off">
+        <button class="btn-primary" id="chat-send">Send</button>
+      </div>
+    </div>
+  `;
+
+  const messagesEl  = document.getElementById('chat-messages');
+  const inputEl     = document.getElementById('chat-input');
+  const sendBtn     = document.getElementById('chat-send');
+  const suggestEl   = document.getElementById('chat-suggestions');
+
+  function appendMessage(role, text) {
     const div = document.createElement('div');
-    div.className = `chat-msg chat-msg-${role}`;
-    div.textContent = text;
-    msgs.appendChild(div);
-    msgs.scrollTop = msgs.scrollHeight;
+    div.className = `chat-msg msg-${role}`;
+    div.innerHTML = `<strong>${role === 'user' ? 'You' : 'Assistant'}:</strong> ${renderMarkdownLite(text)}`;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
     return div;
   }
 
-  function sendMsg() {
-    const msg = input.value.trim();
-    if (!msg) return;
-    appendMsg('user', msg);
-    input.value = '';
-    send.disabled = true;
-    const thinking = appendMsg('assistant', '…');
-
-    fetch('/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: KEY, message: msg })
-    }).then(r => {
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      thinking.textContent = '';
-
-      function pump() {
-        reader.read().then(({ done, value }) => {
-          if (done) { send.disabled = false; return; }
-          buf += dec.decode(value);
-          const lines = buf.split('\n');
-          buf = lines.pop();
-          lines.forEach(line => {
-            if (!line.startsWith('data: ')) return;
-            const raw = line.slice(6).trim();
-            if (raw === '[DONE]') { send.disabled = false; return; }
-            try {
-              const obj = JSON.parse(raw);
-              if (obj.error) { thinking.textContent = '⚠ ' + obj.error; return; }
-              thinking.textContent += obj.content || obj.text || '';
-              msgs.scrollTop = msgs.scrollHeight;
-            } catch {}
-          });
-          pump();
-        }).catch(e => { thinking.textContent = '⚠ ' + e.message; send.disabled = false; });
-      }
-      pump();
-    }).catch(e => { thinking.textContent = '⚠ Network error'; send.disabled = false; });
+  function renderMarkdownLite(text) {
+    return esc(text)
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/`(.*?)`/g, '<code>$1</code>')
+      .replace(/\n/g, '<br>');
   }
 
-  send.addEventListener('click', sendMsg);
-  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); } });
+  async function sendMessage(message) {
+    if (!message.trim()) return;
+    inputEl.value = '';
+    sendBtn.disabled = true;
+    suggestEl.style.display = 'none';
+
+    appendMessage('user', message);
+
+    const thinkingDiv = appendMessage('ai', 'Thinking…');
+
+    try {
+      const response = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: KEY, message }),
+      });
+
+      if (!response.ok) {
+        thinkingDiv.innerHTML = `<strong>Assistant:</strong> Error: ${response.statusText}`;
+        return;
+      }
+
+      // Check if SSE or regular JSON
+      const contentType = response.headers.get('Content-Type') || '';
+      if (contentType.includes('text/event-stream') || contentType.includes('text/plain')) {
+        // SSE streaming
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = '';
+        thinkingDiv.innerHTML = '<strong>Assistant:</strong> ';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          // Parse SSE lines
+          const lines = chunk.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const jsonStr = line.slice(6).trim();
+              if (jsonStr === '[DONE]') break;
+              try {
+                const parsed = JSON.parse(jsonStr);
+                const token = parsed.text || parsed.token || parsed.content || '';
+                accumulated += token;
+              } catch {
+                // Raw text token
+                accumulated += jsonStr;
+              }
+            }
+          }
+          thinkingDiv.innerHTML = `<strong>Assistant:</strong> ${renderMarkdownLite(accumulated)}`;
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        if (!accumulated) {
+          thinkingDiv.innerHTML = '<strong>Assistant:</strong> No response received.';
+        }
+      } else {
+        // Regular JSON
+        const data = await response.json();
+        const text = data.response || data.text || data.message || JSON.stringify(data);
+        thinkingDiv.innerHTML = `<strong>Assistant:</strong> ${renderMarkdownLite(text)}`;
+      }
+    } catch (err) {
+      thinkingDiv.innerHTML = `<strong>Assistant:</strong> Error: ${esc(err.message)}`;
+    } finally {
+      sendBtn.disabled = false;
+    }
+  }
+
+  sendBtn.addEventListener('click', () => sendMessage(inputEl.value));
+  inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(inputEl.value); });
+
+  suggestEl.addEventListener('click', e => {
+    const chip = e.target.closest('.suggestion-chip');
+    if (chip) sendMessage(chip.dataset.question);
+  });
 }
 
-/* ── Init ─────────────────────────────────────────────────────────────────── */
+/* ── Bootstrap ───────────────────────────────────────────────────────────── */
+
 document.addEventListener('DOMContentLoaded', () => {
-  initSidebar();
-  initTopbar();
-  initChat();
-  navigate('overview');
+  // Tab click handlers
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const name = btn.dataset.tab;
+      history.pushState(null, '', '#' + name);
+      activateTab(name);
+    });
+  });
+
+  // Hash change (browser back/forward)
+  window.addEventListener('hashchange', () => {
+    const name = location.hash.slice(1) || 'overview';
+    activateTab(name);
+  });
+
+  // Initial render from hash (or default to overview)
+  const initial = location.hash.slice(1) || 'overview';
+  activateTab(initial);
 });

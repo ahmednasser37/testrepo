@@ -12,7 +12,7 @@ from pathlib import Path
 
 from flask import Flask, request, render_template, Response, redirect, url_for, stream_with_context
 
-from xer_parser import parse_xer_string, extract_data_date
+from xer_parser import parse_xer_bytes_to_df, extract_data_date
 from comparison_engine import compare_schedules
 from data_model import process as dm_process
 from ai_service import cache_key, get_ai_summary, stream_chat_response
@@ -222,10 +222,14 @@ def compare():
         return render_template("index.html", error="Updated file is empty.")
 
     try:
-        bl_content = baseline_bytes.decode("utf-8", errors="replace")
-        up_content = updated_bytes.decode("utf-8", errors="replace")
-        baseline_tables = parse_xer_string(bl_content)
-        updated_tables  = parse_xer_string(up_content)
+        baseline_tables, bl_warnings = parse_xer_bytes_to_df(baseline_bytes)
+        updated_tables,  up_warnings = parse_xer_bytes_to_df(updated_bytes)
+
+        # Log parser warnings for debugging (visible in HF Space logs)
+        for w in bl_warnings:
+            app.logger.warning("[Baseline XER] %s", w)
+        for w in up_warnings:
+            app.logger.warning("[Updated XER] %s", w)
 
         for name, tables, label in [
             ("PROJECT", baseline_tables, "Baseline"),

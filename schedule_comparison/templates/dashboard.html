@@ -3,104 +3,96 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ data.project.updated_name or 'Schedule' }} — P6 Compare</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <title>Schedule Dashboard — {{ data.project.updated_name or "Report" }}</title>
+  
   <link rel="stylesheet" href="/static/style.css">
+  <script>
+    window.__DASH__ = {{ data | tojson }};
+    window.__KEY__ = "{{ key }}";
+  </script>
 </head>
-<body class="app">
-  <!-- Left sidebar -->
-  <aside class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
-      <span class="brand-icon">⬡</span>
-      <span class="brand-name">P6 Compare</span>
-    </div>
-    <nav class="sidebar-nav" role="navigation" aria-label="Main navigation">
-      <a class="nav-item active" data-page="overview" tabindex="0" role="button" aria-current="page">
-        <span class="nav-icon" aria-hidden="true">▦</span>
-        <span class="nav-label">Overview</span>
-      </a>
-      <a class="nav-item" data-page="schedule" tabindex="0" role="button">
-        <span class="nav-icon" aria-hidden="true">☰</span>
-        <span class="nav-label">Schedule</span>
-      </a>
-      <a class="nav-item" data-page="milestones" tabindex="0" role="button">
-        <span class="nav-icon" aria-hidden="true">◆</span>
-        <span class="nav-label">Milestones</span>
-      </a>
-      <a class="nav-item" data-page="lookahead" tabindex="0" role="button">
-        <span class="nav-icon" aria-hidden="true">⏱</span>
-        <span class="nav-label">Lookahead</span>
-      </a>
-      <a class="nav-item" data-page="ev" tabindex="0" role="button">
-        <span class="nav-icon" aria-hidden="true">◈</span>
-        <span class="nav-label">Earned Value</span>
-      </a>
-      <a class="nav-item" data-page="logic" tabindex="0" role="button">
-        <span class="nav-icon" aria-hidden="true">⇄</span>
-        <span class="nav-label">Logic</span>
-      </a>
-    </nav>
-    <button class="collapse-btn" id="collapse-btn" aria-label="Toggle sidebar">‹</button>
-  </aside>
-
-  <!-- Main area -->
-  <div class="main">
-    <header class="topbar" role="banner">
-      <div class="topbar-left">
-        <h1 class="page-heading" id="page-heading">Overview</h1>
-        <div class="project-crumb" aria-label="Project comparison">
-          <span class="crumb baseline" id="crumb-baseline" title="{{ data.project.baseline_name }}">{{ (data.project.baseline_name or 'Baseline')[:28] }}</span>
-          <span class="crumb-arrow" aria-hidden="true">→</span>
-          <span class="crumb updated" id="crumb-updated" title="{{ data.project.updated_name }}">{{ (data.project.updated_name or 'Updated')[:28] }}</span>
+<body>
+  <div class="app-shell">
+    <header class="dash-header">
+      <div class="dash-header-top">
+        <a href="/" class="btn-back">← New Comparison</a>
+        <div class="export-links">
+          <a href="/export/csv?key={{ key }}" class="btn-secondary">⬇ CSV</a>
+          <a href="/export/json?key={{ key }}" class="btn-secondary">⬇ JSON</a>
+        </div>
+      </div>
+      <div class="project-flow">
+        <div class="proj-block">
+          <span class="proj-badge baseline-badge">Baseline</span>
+          <span class="proj-name">{{ data.project.baseline_name or "Baseline" }}</span>
+          <span class="proj-date">{{ data.project.baseline_data_date or "—" }}</span>
+        </div>
+        <span class="proj-arrow">→</span>
+        <div class="proj-block">
+          <span class="proj-badge updated-badge">Updated</span>
+          <span class="proj-name">{{ data.project.updated_name or "Updated" }}</span>
+          <span class="proj-date">{{ data.project.updated_data_date or "—" }}</span>
         </div>
         {% if data.project.data_date_warning %}
-        <span class="warn-chip" role="alert">⚠ Data dates differ</span>
+        <span class="warn-chip">⚠ Data dates differ</span>
         {% endif %}
-      </div>
-      <div class="topbar-right">
-        <span class="health-badge badge" id="health-badge" aria-live="polite"></span>
-        <span class="date-chip">
-          {{ data.project.baseline_data_date[:10] if data.project.baseline_data_date else '—' }}
-          →
-          {{ data.project.updated_data_date[:10] if data.project.updated_data_date else '—' }}
-        </span>
-        <a href="/export/csv?key={{ key }}" class="btn-sm" aria-label="Download CSV">↓ CSV</a>
-        <a href="/export/json?key={{ key }}" class="btn-sm" aria-label="Download JSON">↓ JSON</a>
-        <a href="/" class="btn-primary-sm">+ New</a>
       </div>
     </header>
 
-    <main class="content" id="content" role="main">
-      <div id="page-overview"   class="page active" role="tabpanel" aria-label="Overview"></div>
-      <div id="page-schedule"   class="page" role="tabpanel" aria-label="Schedule" hidden></div>
-      <div id="page-milestones" class="page" role="tabpanel" aria-label="Milestones" hidden></div>
-      <div id="page-lookahead"  class="page" role="tabpanel" aria-label="Lookahead" hidden></div>
-      <div id="page-ev"         class="page" role="tabpanel" aria-label="Earned Value" hidden></div>
-      <div id="page-logic"      class="page" role="tabpanel" aria-label="Logic" hidden></div>
+    <nav class="tab-nav" id="tab-nav">
+      <button class="tab-btn active" data-tab="overview">Overview</button>
+      <button class="tab-btn" data-tab="schedule">Schedule</button>
+      <button class="tab-btn" data-tab="kpis">KPIs</button>
+      <button class="tab-btn" data-tab="lookahead">Lookahead</button>
+      <button class="tab-btn" data-tab="milestones">Milestones</button>
+      <button class="tab-btn" data-tab="procurement">Procurement</button>
+      <button class="tab-btn" data-tab="ev">Earned Value</button>
+      <button class="tab-btn" data-tab="wbs">WBS</button>
+      <button class="tab-btn" data-tab="logic">Logic</button>
+      <button class="tab-btn" data-tab="chat">AI Chat</button>
+    </nav>
+
+    <main class="tab-content">
+      <div id="panel-overview" class="tab-panel active"></div>
+      <div id="panel-schedule" class="tab-panel"></div>
+      <div id="panel-kpis" class="tab-panel"></div>
+      <div id="panel-lookahead" class="tab-panel"></div>
+      <div id="panel-milestones" class="tab-panel"></div>
+      <div id="panel-procurement" class="tab-panel"></div>
+      <div id="panel-ev" class="tab-panel"></div>
+      <div id="panel-wbs" class="tab-panel"></div>
+      <div id="panel-logic" class="tab-panel"></div>
+      <div id="panel-chat" class="tab-panel"></div>
     </main>
   </div>
 
-  <!-- Floating AI Chat -->
-  <div class="chat-fab" id="chat-fab" role="button" aria-label="Open AI Chat" tabindex="0">✦</div>
-  <div class="chat-modal" id="chat-modal" role="dialog" aria-modal="true" aria-label="AI Schedule Assistant">
-    <div class="chat-modal-header">
-      <span>AI Schedule Assistant</span>
-      <button class="chat-close" id="chat-close" aria-label="Close chat">×</button>
+  <!-- Command Center Drill-Down Drawer -->
+  <div id="cc-drawer-overlay" class="cc-drawer-overlay"></div>
+  <aside id="cc-drawer" class="cc-drawer" role="dialog" aria-modal="true" aria-labelledby="cc-drawer-title">
+    <div class="cc-drawer-header">
+      <span class="cc-drawer-title" id="cc-drawer-title">Detail</span>
+      <button class="cc-drawer-close" id="cc-drawer-close" aria-label="Close detail panel">✕</button>
     </div>
-    <div class="chat-messages" id="chat-messages" aria-live="polite" aria-atomic="false"></div>
-    <div class="chat-input-row">
-      <input type="text" class="chat-input" id="chat-input"
-             placeholder="Ask about the schedule..." aria-label="Chat message input">
-      <button class="chat-send" id="chat-send">Send</button>
-    </div>
-  </div>
+    <div class="cc-drawer-body" id="cc-drawer-body"></div>
+  </aside>
 
-  <script>
-    window.__DASH__ = {{ data | tojson }};
-    window.__KEY__  = "{{ key }}";
-  </script>
   <script src="https://unpkg.com/@antv/g2@5/dist/g2.min.js"></script>
   <script src="/static/dashboard.js"></script>
+  <script>
+    // Drawer close handlers (shared globally)
+    document.addEventListener('DOMContentLoaded', function() {
+      var drawer  = document.getElementById('cc-drawer');
+      var overlay = document.getElementById('cc-drawer-overlay');
+      function closeDrawer() {
+        drawer.classList.remove('open');
+        overlay.classList.remove('open');
+      }
+      document.getElementById('cc-drawer-close').addEventListener('click', closeDrawer);
+      overlay.addEventListener('click', closeDrawer);
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeDrawer();
+      });
+    });
+  </script>
 </body>
 </html>

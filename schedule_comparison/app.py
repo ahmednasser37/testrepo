@@ -119,32 +119,42 @@ def _build_full_data(
     procurement = compute_procurement(baseline_tables, updated_tables, data_date)
 
     # OOS detection
-    oos = detect_oos(updated_tables, data_date)
+    try:
+        oos = detect_oos(updated_tables, data_date)
+    except Exception as _e:
+        app.logger.warning("detect_oos failed: %s", _e)
+        oos = {"count": 0, "items": []}
 
     # Longest path / bottleneck
-    bottleneck = compute_longest_path(updated_tables, data_date)
+    try:
+        bottleneck = compute_longest_path(updated_tables, data_date)
+    except Exception as _e:
+        app.logger.warning("compute_longest_path failed: %s", _e)
+        bottleneck = {"bottleneck": None, "driving_chain": []}
 
     # Full relationships list (all updated relationships for milestone trace + gantt lines)
-    from xer_parser import get_relationships as _get_rels
-    _rels_df = _get_rels(updated_tables)
-    # Map task_id → task_code using TASK table
-    _task_raw = updated_tables.get("TASK", pd.DataFrame())
-    if not _rels_df.empty and not _task_raw.empty and "task_id" in _task_raw.columns:
-        _id2code = dict(zip(_task_raw["task_id"].astype(str), _task_raw["task_code"].astype(str)))
-        _rels_df = _rels_df.copy()
-        if "pred_task_id" in _rels_df.columns:
-            _rels_df["pred_code"] = _rels_df["pred_task_id"].astype(str).map(_id2code).fillna("")
-        if "task_id" in _rels_df.columns:
-            _rels_df["succ_code"] = _rels_df["task_id"].astype(str).map(_id2code).fillna("")
     all_relationships = []
-    if not _rels_df.empty:
-        for _, _r in _rels_df.iterrows():
-            all_relationships.append({
-                "pred_code": str(_r.get("pred_code", _r.get("pred_task_id", ""))),
-                "succ_code": str(_r.get("succ_code", _r.get("task_id", ""))),
-                "pred_type": str(_r.get("pred_type", "")),
-                "lag_days":  round(float(_r.get("lag_hr_cnt", 0) or 0) / 8.0, 1),
-            })
+    try:
+        from xer_parser import get_relationships as _get_rels
+        _rels_df = _get_rels(updated_tables)
+        _task_raw = updated_tables.get("TASK", pd.DataFrame())
+        if not _rels_df.empty and not _task_raw.empty and "task_id" in _task_raw.columns:
+            _id2code = dict(zip(_task_raw["task_id"].astype(str), _task_raw["task_code"].astype(str)))
+            _rels_df = _rels_df.copy()
+            if "pred_task_id" in _rels_df.columns:
+                _rels_df["pred_code"] = _rels_df["pred_task_id"].astype(str).map(_id2code).fillna("")
+            if "task_id" in _rels_df.columns:
+                _rels_df["succ_code"] = _rels_df["task_id"].astype(str).map(_id2code).fillna("")
+        if not _rels_df.empty:
+            for _, _r in _rels_df.iterrows():
+                all_relationships.append({
+                    "pred_code": str(_r.get("pred_code", _r.get("pred_task_id", ""))),
+                    "succ_code": str(_r.get("succ_code", _r.get("task_id", ""))),
+                    "pred_type": str(_r.get("pred_type", "")),
+                    "lag_days":  round(float(_r.get("lag_hr_cnt", 0) or 0) / 8.0, 1),
+                })
+    except Exception as _e:
+        app.logger.warning("all_relationships build failed: %s", _e)
 
     # Resource loading (manpower + equipment per period)
     resource_loading = updated_dm.get("resource_loading", {})

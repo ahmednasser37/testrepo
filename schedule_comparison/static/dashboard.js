@@ -68,9 +68,18 @@ function plural(n, word) {
 
 /* ── AntV G2 v5 chart helpers ────────────────────────────────────────────── */
 
+function _g2ok(container) {
+  if (typeof G2 === 'undefined') {
+    if (container) container.innerHTML = '<p style="color:var(--text-muted);padding:12px;font-size:.8rem">Chart unavailable</p>';
+    return false;
+  }
+  return true;
+}
+
 function renderG2Bar(containerId, data, xField, yField, colorField, height = 280) {
   const container = document.getElementById(containerId);
   if (!container || !data.length) return;
+  if (!_g2ok(container)) return;
   container.style.height = height + 'px';
   const chart = new G2.Chart({ container, autoFit: true, height });
   chart.options({
@@ -86,6 +95,7 @@ function renderG2Bar(containerId, data, xField, yField, colorField, height = 280
 function renderG2HBar(containerId, data, xField, yField, height = 320) {
   const container = document.getElementById(containerId);
   if (!container || !data.length) return;
+  if (!_g2ok(container)) return;
   container.style.height = height + 'px';
   const chart = new G2.Chart({ container, autoFit: true, height });
   chart.options({
@@ -102,6 +112,7 @@ function renderG2HBar(containerId, data, xField, yField, height = 320) {
 function renderG2Line(containerId, data, xField, yField, colorField, height = 280) {
   const container = document.getElementById(containerId);
   if (!container || !data.length) return;
+  if (!_g2ok(container)) return;
   container.style.height = height + 'px';
   const chart = new G2.Chart({ container, autoFit: true, height });
   chart.options({
@@ -121,6 +132,7 @@ function renderG2Line(containerId, data, xField, yField, colorField, height = 28
 function renderG2Combo(containerId, data, xField, height = 280) {
   const container = document.getElementById(containerId);
   if (!container || !data.length) return;
+  if (!_g2ok(container)) return;
   container.style.height = height + 'px';
   const chart = new G2.Chart({ container, autoFit: true, height });
 
@@ -555,7 +567,7 @@ function renderOverview(el) {
     ].filter(d => d.count > 0);
     if (donutData.length) {
       const dc = document.getElementById('chart-cc-donut');
-      if (dc) {
+      if (dc && typeof G2 !== 'undefined') {
         dc.style.height = '180px';
         const chart = new G2.Chart({ container: dc, autoFit: true, height: 180 });
         chart.options({ type: 'interval', data: donutData, encode: { y: 'count', color: 'status' }, transform: [{ type: 'stackY' }], coordinate: { type: 'theta', outerRadius: 0.8, innerRadius: 0.5 }, legend: { color: { position: 'right', layout: { justifyContent: 'center' } } } });
@@ -599,7 +611,7 @@ function renderOverview(el) {
     const msData = Object.entries(msCounts).map(([s, c]) => ({ status: s, count: c })).filter(d => d.count > 0);
     if (msData.length) {
       const mc = document.getElementById('chart-cc-ms');
-      if (mc) {
+      if (mc && typeof G2 !== 'undefined') {
         mc.style.height = '180px';
         const chart = new G2.Chart({ container: mc, autoFit: true, height: 180 });
         chart.options({ type: 'interval', data: msData, encode: { y: 'count', color: 'status' }, transform: [{ type: 'stackY' }], coordinate: { type: 'theta', outerRadius: 0.8, innerRadius: 0.5 }, legend: { color: { position: 'right' } } });
@@ -1556,6 +1568,10 @@ function renderResChart(type) {
     return;
   }
   container.innerHTML = '';
+  if (typeof G2 === 'undefined') {
+    container.innerHTML = '<p style="padding:1rem;color:var(--text-muted)">Chart unavailable (CDN unreachable)</p>';
+    return;
+  }
 
   const chart = new G2.Chart({ container: 'res-chart-container', autoFit: true, height: 320 });
   chart.options({

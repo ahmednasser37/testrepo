@@ -67,23 +67,23 @@ def _status_label(code: str) -> str:
 
 
 def _planned_pct(row: pd.Series, data_date: pd.Timestamp) -> float:
-    status = row["status"]
+    """
+    Planned % complete at data_date, derived purely from baseline dates.
+    Status is intentionally ignored — PV is about the PLAN, not actual progress.
+    Early-completed activities (pf > data_date) correctly get < 100%.
+    """
     ps = _to_dt(row["planned_start"])
     pf = _to_dt(row["planned_finish"])
-
-    if status == "Completed":
-        return 100.0
-    if status == "Not Started":
-        if ps is None or ps > data_date:
-            return 0.0
-        # Started but not marked active — use date-based calc
     if ps is None or pf is None:
+        return 0.0
+    if data_date >= pf:
+        return 100.0
+    if data_date <= ps:
         return 0.0
     span = (pf - ps).total_seconds()
     if span <= 0:
         return 100.0
-    elapsed = (data_date - ps).total_seconds()
-    return _clamp(elapsed / span * 100)
+    return _clamp((data_date - ps).total_seconds() / span * 100)
 
 
 # ── WBS helpers ───────────────────────────────────────────────────────────────

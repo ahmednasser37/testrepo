@@ -5,6 +5,26 @@ const D = window.__DASH__;
 const KEY = window.__KEY__;
 const rendered = new Set();
 
+/* ── Count-up animation ─────────────────────────────────────────────────────── */
+
+function countUp(el, target, duration, prefix, suffix) {
+  if (!el) return;
+  duration = duration || 800;
+  prefix   = prefix   || '';
+  suffix   = suffix   || '';
+  const start = performance.now();
+  const isFloat = !Number.isInteger(target);
+  const decimals = isFloat ? (String(target).split('.')[1] || '').length : 0;
+  function step(now) {
+    const elapsed = Math.min((now - start) / duration, 1);
+    const ease = 1 - Math.pow(1 - elapsed, 3); // ease-out-cubic
+    const cur = target * ease;
+    el.textContent = prefix + cur.toFixed(decimals) + suffix;
+    if (elapsed < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
 /* ── Utility helpers ─────────────────────────────────────────────────────── */
 
 function esc(str) {
@@ -136,7 +156,11 @@ function renderG2Combo(containerId, data, xField, height = 280) {
 /* ── Tab routing ─────────────────────────────────────────────────────────── */
 
 function activateTab(name) {
-  // Update buttons with ARIA
+  // Update sidebar nav-item active state
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === name);
+  });
+  // Update legacy tab-btn active state (if present)
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const isActive = btn.dataset.tab === name;
     btn.classList.toggle('active', isActive);
@@ -2032,15 +2056,50 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+/* ── Health badge init ───────────────────────────────────────────────────── */
+
+function initHealthBadge() {
+  const badge = document.getElementById('health-badge');
+  if (!badge) return;
+  const K = D.kpis || {};
+  const ai = D.ai_summary || {};
+  const rawStatus = K.schedule_status || ai.schedule_health || 'unknown';
+  const status = rawStatus.toLowerCase().replace(/[\s_]+/g, '');
+  const labels = { ahead: 'AHEAD', ontrack: 'ON TRACK', behind: 'BEHIND', unknown: '—' };
+  badge.textContent = labels[status] || rawStatus.toUpperCase();
+  badge.className = 'health-badge ' + status;
+}
+
 /* ── Bootstrap ───────────────────────────────────────────────────────────── */
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Tab click handlers
+  // Sidebar nav-item click handlers
+  const tabTitles = {
+    overview: 'Overview', schedule: 'Schedule', kpis: 'KPIs',
+    ev: 'Earned Value', lookahead: 'Lookahead', milestones: 'Milestones',
+    gantt: 'Gantt Chart', procurement: 'Procurement', resources: 'Resources',
+    wbs: 'WBS', logic: 'Logic', chat: 'AI Chat'
+  };
+
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      if (!tab) return;
+      history.pushState(null, '', '#' + tab);
+      activateTab(tab);
+      const titleEl = document.getElementById('page-title');
+      if (titleEl) titleEl.textContent = tabTitles[tab] || tab;
+    });
+  });
+
+  // Legacy tab-btn handlers (backwards compat)
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const name = btn.dataset.tab;
       history.pushState(null, '', '#' + name);
       activateTab(name);
+      const titleEl = document.getElementById('page-title');
+      if (titleEl) titleEl.textContent = tabTitles[name] || name;
     });
   });
 
@@ -2048,9 +2107,14 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('hashchange', () => {
     const name = location.hash.slice(1) || 'overview';
     activateTab(name);
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.textContent = tabTitles[name] || name;
   });
 
   // Initial render from hash (or default to overview)
   const initial = location.hash.slice(1) || 'overview';
   activateTab(initial);
+
+  // Set health badge
+  initHealthBadge();
 });

@@ -43,7 +43,9 @@ class ActivityVariance:
     old_status: str
     new_status: str
     is_critical: bool         # total_float_hr_cnt <= 0 in updated schedule
+    baseline_start: str       # ISO date string or ""
     baseline_finish: str      # ISO date string or ""
+    updated_start: str
     updated_finish: str
 
 
@@ -229,7 +231,9 @@ def _compare_activities(
                 old_status=str(b_row.get("status", "")),
                 new_status="",
                 is_critical=False,
+                baseline_start=_fmt_date(b_row.get("planned_start")),
                 baseline_finish=_fmt_date(b_row.get("planned_finish")),
+                updated_start="",
                 updated_finish="",
             ))
             continue
@@ -273,7 +277,9 @@ def _compare_activities(
             old_status=str(b_row.get("status", "")),
             new_status=str(u_row.get("status", "")),
             is_critical=float_u <= 0,
+            baseline_start=_fmt_date(b_row.get("planned_start")),
             baseline_finish=_fmt_date(b_row.get("planned_finish")),
+            updated_start=_fmt_date(u_row.get("planned_start")),
             updated_finish=_fmt_date(u_row.get("planned_finish")),
         ))
 
@@ -296,7 +302,9 @@ def _compare_activities(
             old_status="",
             new_status=str(u_row.get("status", "")),
             is_critical=float(u_row.get("total_float_hr_cnt", 0) or 0) <= 0,
+            baseline_start="",
             baseline_finish="",
+            updated_start=_fmt_date(u_row.get("planned_start")),
             updated_finish=_fmt_date(u_row.get("planned_finish")),
         ))
 

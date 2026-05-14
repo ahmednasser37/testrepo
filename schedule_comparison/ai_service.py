@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Iterator
 
 import requests
 
@@ -178,3 +179,113 @@ def get_ai_summary(
         stub = dict(_STUB)
         stub["executive_summary"] = f"AI summary failed: {exc}"
         return stub
+
+
+# ── Chat streaming ────────────────────────────────────────────────────────────
+
+def _build_chat_context(full_data: dict) -> str:
+    """Build a compact context string from the full dashboard data dict."""
+    proj = full_data.get("project", {})
+    summary = full_data.get("summary", {})
+    kpis = full_data.get("kpis", {})
+    milestones = full_data.get("milestones", [])
+    procurement = full_data.get("procurement", {})
+    ai_sum = full_data.get("ai_summary", {})
+
+    ms_rows = [
+        {"name": m.get("task_name"), "status": m.get("status"), "variance_days": m.get("finish_variance_days")}
+        for m in milestones[:10]
+    ]
+    proc_items = [
+        {"name": p.get("task_name"), "pct": p.get("pct_complete"), "status": p.get("status")}
+        for p in procurement.get("items", [])[:10]
+    ]
+
+    ctx = {
+        "project": {
+            "baseline": proj.get("baseline_name"),
+            "updated": proj.get("updated_name"),
+            "data_date": proj.get("updated_data_date"),
+            "plan_end": proj.get("plan_end"),
+        },
+        "schedule_health": ai_sum.get("schedule_health", "unknown"),
+        "summary": {k: summary.get(k) for k in (
+            "total_baseline", "total_updated", "added", "deleted", "changed",
+            "delayed_activities", "max_delay_days", "avg_finish_variance_days",
+        )},
+        "kpis": {k: kpis.get(k) for k in (
+            "float_consumption_days", "pct_complete_weighted", "spi_duration",
+            "schedule_delay_days", "critical_total", "near_critical_count",
+        )},
+        "milestones": ms_rows,
+        "procurement": {
+            "total": procurement.get("summary", {}).get("total"),
+            "late": procurement.get("summary", {}).get("late"),
+            "items": proc_items,
+        },
+        "top_delayed": summary.get("top_delayed", [])[:10],
+        "ai_assessment": ai_sum.get("executive_summary", ""),
+    }
+    return json.dumps(ctx, default=str)
+
+
+def stream_chat_response(
+    message: str,
+    full_data: dict,
+    api_key: str,
+    model: str = _DEFAULT_MODEL,
+) -> Iterator[dict]:
+    """
+    Stream a chat response from OpenRouter given a user message and full dashboard data.
+    Yields dicts: {"content": str} for text chunks, {"error": str} on failure.
+    """
+    context = _build_chat_context(full_data)
+    system_prompt = (
+        "You are an expert Primavera P6 schedule analyst and project controls engineer. "
+        "Answer questions about the schedule comparison data provided. "
+        "Be concise, data-driven, and focus on actionable insights. "
+        "Use the data context below for all answers.\n\n"
+        f"SCHEDULE DATA:\n{context}"
+    )
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": message},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 600,
+        "stream": True,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/ahmednasser37/testrepo",
+        "X-Title": "P6 Schedule Comparison",
+    }
+
+    try:
+        with requests.post(
+            _OPENROUTER_URL, json=payload, headers=headers, stream=True, timeout=60
+        ) as resp:
+            resp.raise_for_status()
+            for raw_line in resp.iter_lines():
+                if not raw_line:
+                    continue
+                line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    text = delta.get("content", "")
+                    if text:
+                        yield {"content": text}
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
+    except Exception as exc:
+        yield {"error": str(exc)}

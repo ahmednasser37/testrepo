@@ -50,6 +50,13 @@ def _extract_zone(task_code: str, wbs_name: str) -> str:
     return "Unzoned"
 
 
+def _is_procurement(wbs_name: str) -> bool:
+    """Detect if WBS node is related to procurement/supply."""
+    keywords = ["procur", "supply", "long lead", "short lead", "vendor", "purchase", "delivery", "logistic", "material", "equip"]
+    w = wbs_name.lower()
+    return any(kw in w for kw in keywords)
+
+
 def _status_label(code: str) -> str:
     mapping = {
         "TK_Complete":  "Completed",
@@ -141,7 +148,7 @@ def _rollup_wbs_costs(
 
 def build_activities(tables: dict, data_date: pd.Timestamp) -> pd.DataFrame:
     task = tables.get("TASK", pd.DataFrame())
-    wbs  = tables.get("WBS",  pd.DataFrame())
+    wbs  = tables.get("PROJWBS", tables.get("WBS", pd.DataFrame()))
 
     # Return schema'd empty DataFrame so downstream functions can safely check .empty
     if task.empty:
@@ -177,14 +184,15 @@ def build_activities(tables: dict, data_date: pd.Timestamp) -> pd.DataFrame:
             "wbs_id":              wbs_id,
             "wbs_name":            wbs_name,
             "status":              status,
-            "planned_start":       _to_dt(t.get("target_start_date")),
-            "planned_finish":      _to_dt(t.get("target_end_date")),
+            "planned_start":       _to_dt(t.get("target_start_date") or t.get("early_start_date") or t.get("start_date")),
+            "planned_finish":      _to_dt(t.get("target_end_date") or t.get("early_end_date") or t.get("finish_date")),
             "actual_start":        _to_dt(t.get("act_start_date")),
             "actual_finish":       _to_dt(t.get("act_end_date")),
             "original_duration":   float(t.get("target_drtn_hr_cnt", 0)) / 8,
             "remaining_duration":  float(t.get("remain_drtn_hr_cnt", 0)) / 8,
             "phys_complete_pct":   phys_pct,
             "zone":                _extract_zone(t_code, wbs_name),
+            "is_procurement":      _is_procurement(wbs_name),
         }
         rows.append(row)
 
@@ -203,7 +211,7 @@ def build_activities(tables: dict, data_date: pd.Timestamp) -> pd.DataFrame:
 
 def build_wbs_sheet(tables: dict, activities_df: pd.DataFrame,
                     resources_df: pd.DataFrame) -> pd.DataFrame:
-    wbs = tables.get("WBS", pd.DataFrame())
+    wbs = tables.get("PROJWBS", tables.get("WBS", pd.DataFrame()))
     if wbs.empty:
         return pd.DataFrame()
 
@@ -266,6 +274,7 @@ def build_resources(tables: dict, activities_df: pd.DataFrame) -> pd.DataFrame:
                 "task_name":         a.get("task_name", ""),
                 "wbs_id":            a.get("wbs_id", ""),
                 "phys_complete_pct": float(a.get("phys_complete_pct", 0)),
+                "is_procurement":    a.get("is_procurement", False),
             }
 
     rows = []
@@ -281,8 +290,16 @@ def build_resources(tables: dict, activities_df: pd.DataFrame) -> pd.DataFrame:
         remain_qty  = float(tr.get("remain_qty", 0))
         phys_pct    = ainfo.get("phys_complete_pct", 0.0)
 
-        target_cost = target_qty * unit_price
-        act_cost    = act_qty    * unit_price
+        # FIX: Prioritize explicit cost fields from TASKRSRC if they exist
+        target_cost = float(tr.get("target_cost") or tr.get("target_cost_amt") or 0)
+        if target_cost == 0:
+            target_cost = target_qty * unit_price
+        
+        act_cost = float(tr.get("act_reg_cost") or tr.get("act_reg_cost_amt") or 0) + \
+                   float(tr.get("act_ot_cost") or tr.get("act_ot_cost_amt") or 0)
+        if act_cost == 0:
+            act_cost = act_qty * unit_price
+            
         ev_cost     = target_cost * phys_pct / 100.0
         cv          = ev_cost - act_cost
 
@@ -303,6 +320,7 @@ def build_resources(tables: dict, activities_df: pd.DataFrame) -> pd.DataFrame:
             "ev_cost":         ev_cost,
             "cv":              cv,
             "is_material":     rinfo.get("rsrc_type", "") == "MT",
+            "is_procurement":  ainfo.get("is_procurement", False),
         })
 
     return pd.DataFrame(rows)
@@ -410,13 +428,23 @@ def build_scurve(activities_df: pd.DataFrame,
                  plan_end: pd.Timestamp,
                  bac: float) -> pd.DataFrame:
     """Generate monthly S-Curve data."""
-    if activities_df.empty or plan_start is None or plan_end is None:
+    if activities_df.empty:
+        return pd.DataFrame()
+
+    # FIX: Use activity date range if project dates are missing or narrow
+    acts_start = activities_df["planned_start"].min()
+    acts_finish = activities_df["planned_finish"].max()
+    
+    start_dt = plan_start if plan_start and plan_start < acts_start else acts_start
+    end_dt = plan_end if plan_end and plan_end > acts_finish else acts_finish
+
+    if pd.isna(start_dt) or pd.isna(end_dt):
         return pd.DataFrame()
 
     # Monthly period ends
-    periods = pd.date_range(start=plan_start, end=plan_end, freq="ME")
+    periods = pd.date_range(start=start_dt, end=end_dt, freq="ME")
     if len(periods) == 0:
-        periods = pd.date_range(start=plan_start, end=plan_end, freq="MS")
+        periods = pd.date_range(start=start_dt, end=end_dt + pd.Timedelta(days=31), freq="ME")
 
     # Cost per task
     if not resources_df.empty:
@@ -432,58 +460,82 @@ def build_scurve(activities_df: pd.DataFrame,
     acts["act_cost"]    = acts["act_cost"].fillna(0)
 
     total_planned = acts["target_cost"].sum()
+    if total_planned <= 0:
+        # Fallback to sum of weights (which are 1/n or cost-based)
+        total_planned = acts["weight"].sum()
+        use_weight_as_cost = True
+    else:
+        use_weight_as_cost = False
 
     rows = []
 
+    prev_planned_cum = 0.0
+    prev_actual_cum = 0.0
+
     for period_end in periods:
-        period_planned_cost = 0.0
-        period_actual_cost  = 0.0
+        period_planned_cum = 0.0
+        period_actual_cum  = 0.0
 
         for _, a in acts.iterrows():
             ps = a.get("planned_start")
             pf = a.get("planned_finish")
-            tc = float(a.get("target_cost", 0))
-            ac = float(a.get("act_cost", 0))
-            phys = float(a.get("phys_complete_pct", 0)) / 100.0
+            
+            if use_weight_as_cost:
+                tc = float(a.get("weight", 0))
+                # Approximate actual weight by physical %
+                ac = tc * (float(a.get("phys_complete_pct", 0)) / 100.0)
+            else:
+                tc = float(a.get("target_cost", 0))
+                ac = float(a.get("act_cost", 0))
 
-            if ps is None or pf is None or tc == 0:
+            if ps is None or pf is None or tc <= 0:
                 continue
 
             span = (pf - ps).total_seconds()
             if span <= 0:
                 if ps <= period_end:
-                    period_planned_cost += tc
+                    period_planned_cum += tc
                 continue
 
-            # Planned cost earned up to period_end
-            elapsed = min((period_end - ps).total_seconds(), span)
-            elapsed = max(0, elapsed)
-            period_planned_cost += tc * (elapsed / span)
+            # Cumulative Planned cost earned up to period_end
+            elapsed_p = min((period_end - ps).total_seconds(), span)
+            elapsed_p = max(0, elapsed_p)
+            period_planned_cum += tc * (elapsed_p / span)
 
-            # Actual cost: distribute proportionally
+            # Cumulative Actual cost: 
             astart = a.get("actual_start")
             aend   = a.get("actual_finish")
             if aend is not None and pd.notna(aend):
                 if aend <= period_end:
-                    period_actual_cost += ac
+                    period_actual_cum += ac
             elif astart is not None and pd.notna(astart):
                 if astart <= period_end:
-                    period_actual_cost += ac * (
-                        min((period_end - astart).total_seconds(), span) / span
-                    )
+                    # Distribute AC based on elapsed time vs total span (or use phys %)
+                    phys = float(a.get("phys_complete_pct", 0)) / 100.0
+                    period_actual_cum += ac * phys
+            
+        # Periodic (this month) = Cumulative - Previous Month's Cumulative
+        periodic_planned = period_planned_cum - prev_planned_cum
+        periodic_actual  = period_actual_cum - prev_actual_cum
+        
+        # Guard against small floating point noise
+        periodic_planned = max(0.0, periodic_planned)
+        periodic_actual  = max(0.0, periodic_actual)
 
-        # FIX (Codex P1): both percentages share BAC as denominator so the
-        # gap between curves represents true cost/schedule slip.
-        # actual_cum_pct is intentionally uncapped — >100 signals cost overrun.
         rows.append({
             "period_date":       period_end.replace(day=1),
-            "planned_cum_pct":   round(period_planned_cost / total_planned * 100, 2)
+            "planned_cum_pct":   round(period_planned_cum / total_planned * 100, 2)
                                  if total_planned > 0 else 0.0,
-            "actual_cum_pct":    round(period_actual_cost  / total_planned * 100, 2)
+            "actual_cum_pct":    round(period_actual_cum  / total_planned * 100, 2)
                                  if total_planned > 0 else 0.0,
-            "planned_cum_cost":  round(period_planned_cost, 2),
-            "actual_cum_cost":   round(period_actual_cost,  2),
+            "planned_cum_cost":  round(period_planned_cum, 2),
+            "actual_cum_cost":   round(period_actual_cum,  2),
+            "planned_periodic_cost": round(periodic_planned, 2),
+            "actual_periodic_cost":  round(periodic_actual, 2),
         })
+        
+        prev_planned_cum = period_planned_cum
+        prev_actual_cum = period_actual_cum
 
     return pd.DataFrame(rows)
 

@@ -4,58 +4,73 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>P6 Schedule Comparison</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="page-wrap">
-    <header class="site-header">
-      <h1>P6 Schedule Comparison</h1>
-      <p class="subtitle">Upload two Primavera P6 XER files to compare baseline vs updated schedule</p>
+
+    <header class="upload-header">
+      <div class="wordmark">
+        <div class="wordmark-icon">📊</div>
+        <span class="wordmark-text">P6 Compare</span>
+      </div>
+      <h1>Schedule Comparison</h1>
+      <p class="subtitle">Upload two Primavera P6 XER files to generate an instant variance report with AI analysis.</p>
     </header>
 
     {% if error %}
-    <div class="alert alert-error">
-      <strong>Error:</strong> {{ error }}
+    <div class="alert alert-error" style="max-width:800px;margin:0 auto 24px;">
+      {{ error }}
     </div>
     {% endif %}
 
     <div class="card upload-card">
       <form method="POST" action="/compare" enctype="multipart/form-data" id="upload-form">
         <div class="upload-grid">
+
           <div class="upload-box">
-            <label class="upload-label" for="baseline">
-              <span class="upload-icon">📋</span>
+            <label class="upload-label" for="baseline" id="baseline-label">
+              <span class="upload-badge baseline-badge">Baseline</span>
+              <div class="upload-icon-wrap">📋</div>
               <span class="upload-title">Baseline Schedule</span>
-              <span class="upload-hint">The original / approved plan</span>
+              <span class="upload-hint">The original approved plan</span>
             </label>
             <input type="file" id="baseline" name="baseline" accept=".xer" required>
             <div class="file-name" id="baseline-name">No file selected</div>
           </div>
 
-          <div class="upload-arrow">→</div>
+          <div class="upload-divider">
+            <div class="upload-divider-line"></div>
+            <div class="upload-divider-icon">→</div>
+            <div class="upload-divider-line"></div>
+          </div>
 
           <div class="upload-box">
-            <label class="upload-label" for="updated">
-              <span class="upload-icon">🔄</span>
+            <label class="upload-label" for="updated" id="updated-label">
+              <span class="upload-badge updated-badge">Updated</span>
+              <div class="upload-icon-wrap">🔄</div>
               <span class="upload-title">Updated Schedule</span>
-              <span class="upload-hint">The current / revised plan</span>
+              <span class="upload-hint">The current or revised plan</span>
             </label>
             <input type="file" id="updated" name="updated" accept=".xer" required>
             <div class="file-name" id="updated-name">No file selected</div>
           </div>
+
         </div>
 
         <div class="submit-row">
           <button type="submit" class="btn-primary" id="submit-btn">
             Compare Schedules
           </button>
-          <span class="submit-hint">Processing may take a few seconds for large files</span>
+          <span class="submit-hint">Typically under 10 seconds for most XER files</span>
         </div>
       </form>
     </div>
 
     <div class="info-grid">
       <div class="info-card">
+        <span class="info-card-icon">🔍</span>
         <h3>What gets compared</h3>
         <ul>
           <li>Activity start &amp; finish dates</li>
@@ -67,6 +82,7 @@
         </ul>
       </div>
       <div class="info-card">
+        <span class="info-card-icon">📈</span>
         <h3>Dashboard outputs</h3>
         <ul>
           <li>Data date comparison</li>
@@ -78,6 +94,7 @@
         </ul>
       </div>
       <div class="info-card">
+        <span class="info-card-icon">📁</span>
         <h3>File requirements</h3>
         <ul>
           <li>Primavera P6 .XER format</li>
@@ -88,20 +105,30 @@
         </ul>
       </div>
     </div>
+
   </div>
 
   <script>
-    function updateFileName(inputId, nameId) {
+    function setupFileInput(inputId, labelId, nameId, selectedClass) {
       const input = document.getElementById(inputId);
-      const label = document.getElementById(nameId);
-      input.addEventListener('change', function() {
-        label.textContent = this.files[0] ? this.files[0].name : 'No file selected';
+      const label = document.getElementById(labelId);
+      const nameEl = document.getElementById(nameId);
+      input.addEventListener('change', function () {
+        if (this.files[0]) {
+          nameEl.textContent = this.files[0].name;
+          nameEl.classList.add('selected');
+          label.classList.add('has-file');
+        } else {
+          nameEl.textContent = 'No file selected';
+          nameEl.classList.remove('selected');
+          label.classList.remove('has-file');
+        }
       });
     }
-    updateFileName('baseline', 'baseline-name');
-    updateFileName('updated', 'updated-name');
+    setupFileInput('baseline', 'baseline-label', 'baseline-name');
+    setupFileInput('updated',  'updated-label',  'updated-name');
 
-    document.getElementById('upload-form').addEventListener('submit', function() {
+    document.getElementById('upload-form').addEventListener('submit', function () {
       const btn = document.getElementById('submit-btn');
       btn.textContent = 'Comparing…';
       btn.disabled = true;

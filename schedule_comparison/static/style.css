@@ -1154,3 +1154,10 @@ input[type="file"] { display: none; }
   .main-area { display: block; }
   body { background: white; }
 }
+
+/* ── Resource histogram bars ─────────────────────────────── */
+#res-chart-container { overflow-x: auto; }
+
+/* ── Overview card tweaks ────────────────────────────────── */
+.cc-chart-card { overflow: hidden; }
+.cc-chart-card .cc-chart-hint { font-size: .67rem; color: var(--text-muted, #64748b); margin-bottom: 4px; }

@@ -165,6 +165,66 @@ function renderG2Combo(containerId, data, xField, height = 280) {
   chart.render();
 }
 
+/* ── Inline SVG chart helper (no CDN needed) ─────────────────────────────── */
+function renderSVGChart(containerId, seriesData, type, height) {
+  type = type || 'line'; height = height || 280;
+  const container = typeof containerId === 'string'
+    ? document.getElementById(containerId) : containerId;
+  if (!container || !seriesData.length) return;
+  container.style.height = height + 'px';
+  const seriesMap = {};
+  seriesData.forEach(d => { (seriesMap[d.series] = seriesMap[d.series]||[]).push(d); });
+  const allPeriods = [...new Set(seriesData.map(d => d.period))].sort();
+  const maxVal = Math.max(...seriesData.map(d => d.value||0)) || 1;
+  const n = allPeriods.length;
+  const W = container.clientWidth || 600;
+  const H = height;
+  const pad = { l:62, r:16, t:22, b:36 };
+  const cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
+  const xPos = i => pad.l + (i + 0.5) * cW / n;
+  const yPos = v => pad.t + cH - Math.min(v / maxVal, 1) * cH;
+  const yFmt = v => v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v.toFixed(0);
+  const COLORS = ['#2563eb','#16a34a','#d97706','#dc2626','#8b5cf6','#0891b2'];
+  const keys = Object.keys(seriesMap);
+  let g = '';
+  // grid
+  [0,.25,.5,.75,1].forEach(f => {
+    const y = pad.t + cH*(1-f);
+    g += `<line x1="${pad.l}" y1="${y}" x2="${pad.l+cW}" y2="${y}" stroke="#f1f5f9" stroke-width="1"/>`;
+    g += `<text x="${pad.l-4}" y="${y+3.5}" text-anchor="end" font-size="9" fill="#94a3b8">${yFmt(maxVal*f)}</text>`;
+  });
+  if (type === 'line') {
+    keys.forEach((sk,si) => {
+      const pts = seriesMap[sk].filter(d=>d.value!=null)
+        .map(d => `${xPos(allPeriods.indexOf(d.period))},${yPos(d.value)}`).join(' ');
+      if (pts) g += `<polyline points="${pts}" fill="none" stroke="${COLORS[si%COLORS.length]}" stroke-width="2.5" stroke-linejoin="round"/>`;
+    });
+  } else {
+    const bW = Math.max(2, cW/n/(keys.length+0.5)-1);
+    keys.forEach((sk,si) => {
+      seriesMap[sk].forEach(d => {
+        if (!d.value) return;
+        const xi = allPeriods.indexOf(d.period);
+        const x0 = pad.l + xi*cW/n + si*(bW+1) + 2;
+        const h2 = Math.min(d.value/maxVal,1)*cH;
+        g += `<rect x="${x0.toFixed(1)}" y="${yPos(d.value).toFixed(1)}" width="${bW.toFixed(1)}" height="${h2.toFixed(1)}" fill="${COLORS[si%COLORS.length]}" opacity="0.85" rx="1"/>`;
+      });
+    });
+  }
+  // x labels
+  const step = n>24?6:n>12?3:n>8?2:1;
+  allPeriods.forEach((p,i) => {
+    if (i%step!==0) return;
+    g += `<text x="${xPos(i).toFixed(1)}" y="${H-4}" text-anchor="middle" font-size="8" fill="#94a3b8">${p.slice(0,7)}</text>`;
+  });
+  // legend
+  keys.forEach((sk,si) => {
+    g += `<rect x="${pad.l+si*130}" y="4" width="10" height="10" rx="2" fill="${COLORS[si%COLORS.length]}"/>`;
+    g += `<text x="${pad.l+si*130+14}" y="13" font-size="9" fill="#64748b">${sk}</text>`;
+  });
+  container.innerHTML = `<svg width="100%" height="${H}" style="display:block"><g>${g}</g></svg>`;
+}
+
 /* ── Tab routing ─────────────────────────────────────────────────────────── */
 
 function activateTab(name) {
@@ -320,25 +380,25 @@ function renderOverview(el) {
         <div id="chart-cc-scurve" style="height:240px"></div>
       </div>
 
-      <!-- 2. Activity Status Donut -->
+      <!-- 2. Activity Status -->
       <div class="cc-chart-card" id="chart-card-status" tabindex="0" role="button">
         <div class="cc-chart-title">Activity Status</div>
         <div class="cc-chart-hint">Completed · In Progress · Not Started</div>
-        <div id="chart-cc-donut" style="height:180px"></div>
+        <div id="chart-cc-donut"></div>
       </div>
 
-      <!-- 3. Longest Path -->
+      <!-- 3. Longest Path / Bottleneck -->
       <div class="cc-chart-card" id="chart-card-lp" tabindex="0" role="button">
         <div class="cc-chart-title">Longest Path</div>
-        <div class="cc-chart-hint">Critical activities by WBS</div>
-        <div id="chart-cc-lp" style="height:180px"></div>
+        <div class="cc-chart-hint">Bottleneck activity · driving chain</div>
+        <div id="chart-cc-lp"></div>
       </div>
 
       <!-- 4. Procurement Status -->
-      <div class="cc-chart-card cc-chart-card--tall" id="chart-card-proc" tabindex="0" role="button">
+      <div class="cc-chart-card" id="chart-card-proc" tabindex="0" role="button">
         <div class="cc-chart-title">Procurement Status</div>
-        <div class="cc-chart-hint">Procurement items by status</div>
-        <div id="chart-cc-proc" style="height:200px"></div>
+        <div class="cc-chart-hint">Items by status</div>
+        <div id="chart-cc-proc"></div>
       </div>
 
       <!-- 5. CPI Gauge -->
@@ -371,18 +431,18 @@ function renderOverview(el) {
         </div>
       </div>
 
-      <!-- 8. Logic Integrity -->
+      <!-- 8. OOS Indicator -->
       <div class="cc-chart-card" id="chart-card-logic" tabindex="0" role="button">
-        <div class="cc-chart-title">Logic Integrity</div>
-        <div class="cc-chart-hint">Relationship changes (added / deleted / modified)</div>
-        <div id="chart-cc-logic" style="height:160px"></div>
+        <div class="cc-chart-title">Out-of-Sequence</div>
+        <div class="cc-chart-hint">Activities started before predecessor finished</div>
+        <div id="chart-cc-logic"></div>
       </div>
 
-      <!-- 9. Milestone Status Donut -->
+      <!-- 9. Milestone Status -->
       <div class="cc-chart-card" id="chart-card-ms" tabindex="0" role="button">
         <div class="cc-chart-title">Milestone Status</div>
         <div class="cc-chart-hint">On Track · At Risk · Late · Complete</div>
-        <div id="chart-cc-ms" style="height:180px"></div>
+        <div id="chart-cc-ms"></div>
       </div>
 
       <!-- 10. WBS Distribution -->
@@ -501,11 +561,12 @@ function renderOverview(el) {
     ));
   });
   document.getElementById('chart-card-lp').addEventListener('click', () => {
-    const crit = variances.filter(a=>a.is_critical);
-    crit.sort((a,b) => (a.wbs_name||'').localeCompare(b.wbs_name||''));
-    openDrawer('Longest Path Details', drawerTable(
-      ['WBS','Code','Name','Finish Var.'],
-      crit.map(a=>[a.wbs_name,a.task_code,a.task_name,fmt(a.finish_variance_days,1)+'d'])
+    const chain = (D.bottleneck||{}).driving_chain || [];
+    const bn = (D.bottleneck||{}).bottleneck;
+    if (!bn) { openDrawer('Longest Path', '<p style="padding:16px;color:var(--text-muted)">No bottleneck data available.</p>'); return; }
+    openDrawer('Longest Path — Driving Chain', drawerTable(
+      ['#','Code','Activity Name','Finish','RPL (days)'],
+      chain.map((c,i)=>[i+1, c.task_code, c.task_name, c.planned_finish||'—', c.rpl_days+'d'])
     ));
   });
   document.getElementById('chart-card-proc').addEventListener('click', () => {
@@ -523,9 +584,10 @@ function renderOverview(el) {
     ));
   });
   document.getElementById('chart-card-logic').addEventListener('click', () => {
-    openDrawer('Logic Changes', drawerTable(
-      ['Pred','Succ','Change','Old Type','New Type'],
-      rels.slice(0,50).map(r=>[r.pred_code,r.succ_code,r.change_type,r.old_pred_type||'—',r.new_pred_type||'—'])
+    const oosItems = (D.oos || {}).items || [];
+    openDrawer('Out-of-Sequence Activities', drawerTable(
+      ['Activity','Name','Predecessor','Days OOS','Pred Finish'],
+      oosItems.slice(0,50).map(r=>[r.task_code,r.task_name,r.pred_code,r.days_oos+'d',r.pred_constrained_finish||'—'])
     ));
   });
   document.getElementById('chart-card-ms').addEventListener('click', () => {
@@ -541,89 +603,165 @@ function renderOverview(el) {
     ));
   });
 
-  // ── Render all G2 charts ─────────────────────────────────────────────────
+  // ── Render all overview card content (HTML-only, no CDN) ──────────────────
   setTimeout(() => {
 
-    // 1. S-Curve + Histogram
+    // 1. S-Curve — keep G2 if available, else skip
     const scBase = ((D.scurve||{}).baseline||[]).map(p => ([
-      { period: fmtDate(p.period_date), value: p.planned_cum_cost||0, series: 'Baseline Planned (Cum)' },
-      { period: fmtDate(p.period_date), value: p.planned_periodic_cost||0, series: 'Baseline Monthly' }
+      { period: fmtDate(p.period_date), value: p.planned_cum_cost||0, series: 'Baseline PV' },
     ])).flat();
     const scUpd  = ((D.scurve||{}).updated||[]).map(p => ([
-      { period: fmtDate(p.period_date), value: p.actual_cum_cost||0, series: 'Actual (Cum)' },
-      { period: fmtDate(p.period_date), value: p.actual_periodic_cost||0, series: 'Actual Monthly' }
+      { period: fmtDate(p.period_date), value: p.actual_cum_cost||0, series: 'EV (Actual)' },
     ])).flat();
-    const scCombined = [...scBase, ...scUpd];
-    if (scCombined.length) renderG2Combo('chart-cc-scurve', scCombined, 'period', 240);
+    const scCombined = [...scBase, ...scUpd].filter(d => d.value > 0);
+    if (scCombined.length) {
+      if (typeof G2 !== 'undefined') renderG2Combo('chart-cc-scurve', scCombined, 'period', 240);
+      else renderSVGChart('chart-cc-scurve', scCombined, 'line', 240);
+    }
 
-    // 2. Activity Status Donut
-    const completed   = variances.filter(a => (a.new_status||a.old_status) === 'Completed').length;
-    const inProgress  = variances.filter(a => (a.new_status||a.old_status) === 'In Progress').length;
-    const notStarted  = variances.filter(a => (a.new_status||a.old_status) === 'Not Started').length;
-    const donutData   = [
-      { status: 'Completed',   count: completed   || 0 },
-      { status: 'In Progress', count: inProgress  || 0 },
-      { status: 'Not Started', count: notStarted  || 0 },
-    ].filter(d => d.count > 0);
-    if (donutData.length) {
-      const dc = document.getElementById('chart-cc-donut');
-      if (dc && typeof G2 !== 'undefined') {
-        dc.style.height = '180px';
-        const chart = new G2.Chart({ container: dc, autoFit: true, height: 180 });
-        chart.options({ type: 'interval', data: donutData, encode: { y: 'count', color: 'status' }, transform: [{ type: 'stackY' }], coordinate: { type: 'theta', outerRadius: 0.8, innerRadius: 0.5 }, legend: { color: { position: 'right', layout: { justifyContent: 'center' } } } });
-        chart.render();
+    // 2. Activity Status — HTML stat blocks
+    const completed_n   = variances.filter(a=>(a.new_status||a.old_status)==='Completed').length;
+    const inProgress_n  = variances.filter(a=>(a.new_status||a.old_status)==='In Progress').length;
+    const notStarted_n  = variances.filter(a=>(a.new_status||a.old_status)==='Not Started').length;
+    const dc = document.getElementById('chart-cc-donut');
+    if (dc) {
+      dc.innerHTML = `<div style="padding:10px">
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <div style="flex:1;text-align:center"><div style="font-size:1.6rem;font-weight:700;color:#16a34a">${completed_n}</div><div style="font-size:.6rem;text-transform:uppercase;color:var(--text-muted)">Done</div></div>
+          <div style="flex:1;text-align:center"><div style="font-size:1.6rem;font-weight:700;color:#2563eb">${inProgress_n}</div><div style="font-size:.6rem;text-transform:uppercase;color:var(--text-muted)">Active</div></div>
+          <div style="flex:1;text-align:center"><div style="font-size:1.6rem;font-weight:700;color:#94a3b8">${notStarted_n}</div><div style="font-size:.6rem;text-transform:uppercase;color:var(--text-muted)">Pending</div></div>
+        </div>
+        <div style="display:flex;gap:2px;height:6px;border-radius:4px;overflow:hidden">
+          <div style="flex:${completed_n||0.01};background:#16a34a"></div>
+          <div style="flex:${inProgress_n||0.01};background:#2563eb"></div>
+          <div style="flex:${notStarted_n||0.01};background:#e2e8f0"></div>
+        </div></div>`;
+    }
+
+    // 3. Longest Path — Bottleneck card
+    const bn    = (D.bottleneck||{}).bottleneck;
+    const chain = (D.bottleneck||{}).driving_chain || [];
+    const lp = document.getElementById('chart-cc-lp');
+    if (lp) {
+      if (!bn) {
+        lp.innerHTML = '<p style="padding:12px;font-size:.78rem;color:var(--text-muted)">No bottleneck data</p>';
+      } else {
+        const chainHtml = chain.slice(0,5).map((c,i) =>
+          `<div style="display:flex;align-items:center;gap:5px;padding:3px 0;border-bottom:1px solid #f1f5f9">
+            <span style="flex-shrink:0;font-size:.6rem;background:${i===0?'#dc2626':'#94a3b8'};color:#fff;border-radius:999px;padding:1px 5px">${i+1}</span>
+            <span style="flex:1;font-size:.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(c.task_name)}">${esc(c.task_code)}</span>
+            <span style="font-size:.65rem;color:var(--text-muted);flex-shrink:0">${c.rpl_days}d</span>
+          </div>`).join('');
+        lp.innerHTML = `<div style="padding:10px">
+          <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px">
+            <span style="font-size:1.8rem;font-weight:700;color:#dc2626">${bn.rpl_days}</span>
+            <span style="font-size:.65rem;font-weight:600;color:var(--text-muted)">DAYS REMAINING</span>
+          </div>
+          <div style="font-size:.75rem;font-weight:600;margin-bottom:1px">${esc(bn.task_code)}</div>
+          <div style="font-size:.68rem;color:var(--text-muted);margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(bn.task_name)}</div>
+          <div style="font-size:.6rem;font-weight:600;text-transform:uppercase;color:var(--text-muted);margin-bottom:3px">DRIVING CHAIN</div>
+          ${chainHtml}</div>`;
       }
     }
 
-    // 3. Longest Path (Critical Activities by WBS)
-    const wbsCritCounts = {};
-    variances.filter(a => a.is_critical).forEach(a => {
-      const w = a.wbs_name || 'Ungrouped';
-      wbsCritCounts[w] = (wbsCritCounts[w] || 0) + 1;
-    });
-    const lpData = Object.entries(wbsCritCounts)
-      .sort((a,b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([wbs, count]) => ({ wbs: wbs.slice(0, 15), count }));
-    if (lpData.length) renderG2HBar('chart-cc-lp', lpData, 'wbs', 'count', 180);
-
-    // 4. Procurement Status (Histogram style)
-    const pSum = (D.procurement || {}).summary || {};
-    const procData = [
-      { status: 'Complete', count: pSum.complete || 0 },
-      { status: 'In Progress', count: pSum.in_progress || 0 },
-      { status: 'Not Started', count: pSum.not_started || 0 },
-      { status: 'Late', count: pSum.late || 0 }
-    ].filter(d => d.count > 0);
-    if (procData.length) renderG2Bar('chart-cc-proc', procData, 'status', 'count', 'status', 200);
-
-    // 8. Logic integrity bar
-    const logicData = [
-      { type: 'Added',   count: S.relationships_added   || 0 },
-      { type: 'Deleted', count: S.relationships_deleted || 0 },
-      { type: 'Changed', count: S.relationships_changed || 0 },
-    ].filter(d => d.count > 0);
-    if (logicData.length) renderG2Bar('chart-cc-logic', logicData, 'type', 'count', 'type', 160);
-
-    // 9. Milestone Status donut
-    const msCounts = { on_track: 0, at_risk: 0, late: 0, complete: 0 };
-    milestones.forEach(m => { if (msCounts[m.status] != null) msCounts[m.status]++; });
-    const msData = Object.entries(msCounts).map(([s, c]) => ({ status: s, count: c })).filter(d => d.count > 0);
-    if (msData.length) {
-      const mc = document.getElementById('chart-cc-ms');
-      if (mc && typeof G2 !== 'undefined') {
-        mc.style.height = '180px';
-        const chart = new G2.Chart({ container: mc, autoFit: true, height: 180 });
-        chart.options({ type: 'interval', data: msData, encode: { y: 'count', color: 'status' }, transform: [{ type: 'stackY' }], coordinate: { type: 'theta', outerRadius: 0.8, innerRadius: 0.5 }, legend: { color: { position: 'right' } } });
-        chart.render();
+    // 4. Procurement Status — stat blocks
+    const pSum = (D.procurement||{}).summary||{};
+    const pTotal = pSum.total||0;
+    const procEl = document.getElementById('chart-cc-proc');
+    if (procEl) {
+      if (!pTotal) {
+        procEl.innerHTML = '<p style="padding:12px;font-size:.78rem;color:var(--text-muted)">No procurement items detected</p>';
+      } else {
+        const pItems = [
+          {label:'Complete',  count:pSum.complete||0,    color:'#16a34a'},
+          {label:'In Progress',count:pSum.in_progress||0, color:'#2563eb'},
+          {label:'Not Started',count:pSum.not_started||0, color:'#94a3b8'},
+          {label:'Late',      count:pSum.late||0,         color:'#dc2626'},
+        ];
+        procEl.innerHTML = `<div style="padding:10px">
+          <div style="display:flex;gap:6px;margin-bottom:8px">
+            ${pItems.map(it=>`<div style="flex:1;text-align:center">
+              <div style="font-size:1.4rem;font-weight:700;color:${it.color}">${it.count}</div>
+              <div style="font-size:.58rem;text-transform:uppercase;color:var(--text-muted)">${it.label}</div>
+            </div>`).join('')}
+          </div>
+          <div style="display:flex;gap:2px;border-radius:4px;overflow:hidden;height:6px">
+            ${pItems.map(it=>`<div style="flex:${it.count||0.01};background:${it.color}"></div>`).join('')}
+          </div>
+          <div style="font-size:.65rem;color:var(--text-muted);margin-top:4px">${pTotal} total procurement activities</div></div>`;
       }
     }
 
-    // 10. WBS distribution bar (top 8 by activity count approximated by wbs_level 1 nodes)
-    const wbsTop = wbsRows.filter(w => w.wbs_level === 1 || w.wbs_level === '1').slice(0, 8);
-    if (wbsTop.length) {
-      const wbsData = wbsTop.map(w => ({ name: (w.wbs_name||'').slice(0, 16), cost: parseFloat(w.total_planned_cost) || 0 }));
-      renderG2HBar('chart-cc-wbs', wbsData, 'name', 'cost', 180);
+    // 8. OOS Indicator
+    const oos = D.oos||{};
+    const oosCount = oos.count||0;
+    const oosItems = (oos.items||[]).slice(0,4);
+    const oosEl = document.getElementById('chart-cc-logic');
+    if (oosEl) {
+      const sevColor = oosCount===0?'#16a34a':oosCount<=5?'#d97706':'#dc2626';
+      oosEl.innerHTML = `<div style="padding:10px">
+        <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:4px">
+          <span style="font-size:2rem;font-weight:700;color:${sevColor}">${oosCount}</span>
+          <span style="font-size:.65rem;color:var(--text-muted)">activities out-of-sequence</span>
+        </div>
+        ${oosCount===0
+          ? '<p style="font-size:.75rem;color:#16a34a;margin-top:4px">✓ Schedule logic is intact</p>'
+          : oosItems.map(it=>`<div style="font-size:.7rem;padding:3px 0;border-bottom:1px solid #f1f5f9;display:flex;gap:6px;align-items:center">
+              <span style="color:${sevColor};font-weight:600;flex-shrink:0">${esc(it.task_code)}</span>
+              <span style="color:var(--text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${it.days_oos}d behind ${esc(it.pred_code)}</span>
+            </div>`).join('')
+        }</div>`;
+    }
+
+    // 9. Milestone Status — 2×2 badge grid
+    const msCounts = {complete:0,on_track:0,at_risk:0,late:0};
+    milestones.forEach(m=>{if(msCounts[m.status]!=null)msCounts[m.status]++;});
+    const msEl = document.getElementById('chart-cc-ms');
+    if (msEl) {
+      msEl.innerHTML = `<div style="padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <div style="text-align:center;padding:8px;background:#f0fdf4;border-radius:6px">
+          <div style="font-size:1.5rem;font-weight:700;color:#16a34a">${msCounts.complete}</div>
+          <div style="font-size:.6rem;text-transform:uppercase;color:#15803d">Complete</div>
+        </div>
+        <div style="text-align:center;padding:8px;background:#eff6ff;border-radius:6px">
+          <div style="font-size:1.5rem;font-weight:700;color:#2563eb">${msCounts.on_track}</div>
+          <div style="font-size:.6rem;text-transform:uppercase;color:#1d4ed8">On Track</div>
+        </div>
+        <div style="text-align:center;padding:8px;background:#fffbeb;border-radius:6px">
+          <div style="font-size:1.5rem;font-weight:700;color:#d97706">${msCounts.at_risk}</div>
+          <div style="font-size:.6rem;text-transform:uppercase;color:#b45309">At Risk</div>
+        </div>
+        <div style="text-align:center;padding:8px;background:#fef2f2;border-radius:6px">
+          <div style="font-size:1.5rem;font-weight:700;color:#dc2626">${msCounts.late}</div>
+          <div style="font-size:.6rem;text-transform:uppercase;color:#b91c1c">Late</div>
+        </div>
+      </div>`;
+    }
+
+    // 10. WBS Distribution — CSS horizontal bars
+    const wbsAll = wbsRows.filter(w=>w.wbs_level===2||w.wbs_level==='2')
+      .sort((a,b)=>(b.total_planned_cost||0)-(a.total_planned_cost||0)).slice(0,6);
+    const wbsForBars = wbsAll.length ? wbsAll :
+      wbsRows.filter(w=>w.wbs_level===1||w.wbs_level==='1')
+        .sort((a,b)=>(b.total_planned_cost||0)-(a.total_planned_cost||0)).slice(0,6);
+    const wbsEl = document.getElementById('chart-cc-wbs');
+    if (wbsEl) {
+      if (!wbsForBars.length) {
+        wbsEl.innerHTML = '<p style="padding:12px;font-size:.78rem;color:var(--text-muted)">No WBS cost data</p>';
+      } else {
+        const wMax = Math.max(...wbsForBars.map(w=>w.total_planned_cost||0))||1;
+        wbsEl.innerHTML = `<div style="padding:10px">${wbsForBars.map(w=>{
+          const cost = w.total_planned_cost||0;
+          const pct2 = (cost/wMax*100).toFixed(1);
+          return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+            <div style="font-size:.65rem;color:var(--text-muted);width:90px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(w.wbs_name)}">${esc((w.wbs_name||'').slice(0,18))}</div>
+            <div style="flex:1;background:#f1f5f9;border-radius:3px;height:10px">
+              <div style="width:${pct2}%;background:#2563eb;border-radius:3px;height:10px"></div>
+            </div>
+            <div style="font-size:.65rem;color:var(--text-muted);width:46px;text-align:right;flex-shrink:0">${fmtCost(cost)}</div>
+          </div>`;
+        }).join('')}</div>`;
+      }
     }
 
   }, 50);
@@ -1409,43 +1547,34 @@ function renderEV(el) {
 
     let data = [];
     if (view === 'cumulative') {
-      sb.forEach(p => {
-        if (p.planned_cum_cost) data.push({ period: fmtDate(p.period_date), value: p.planned_cum_cost, series: 'PV (Planned)' });
-      });
-      sc.forEach(p => {
-        if (p.actual_cum_cost) data.push({ period: fmtDate(p.period_date), value: p.actual_cum_cost, series: 'EV (Earned)' });
-      });
+      sb.forEach(p => { if (p.planned_cum_cost) data.push({period:fmtDate(p.period_date),value:p.planned_cum_cost,series:'PV (Planned)'}); });
+      sc.forEach(p => { if (p.actual_cum_cost)  data.push({period:fmtDate(p.period_date),value:p.actual_cum_cost, series:'EV (Earned)'}); });
     } else if (view === 'periodic') {
-      sb.forEach(p => {
-        data.push({ period: fmtDate(p.period_date), value: p.planned_periodic_cost || 0, series: 'PV Monthly' });
-      });
-      sc.forEach(p => {
-        data.push({ period: fmtDate(p.period_date), value: p.actual_periodic_cost || 0, series: 'EV Monthly' });
-      });
+      sb.forEach(p => data.push({period:fmtDate(p.period_date),value:p.planned_periodic_cost||0,series:'PV Monthly'}));
+      sc.forEach(p => data.push({period:fmtDate(p.period_date),value:p.actual_periodic_cost||0,series:'EV Monthly'}));
     } else if (view === 'spi') {
-      // Compute period SPI from cumulative data
       const scMap = {};
       sc.forEach(p => scMap[fmtDate(p.period_date)] = p);
       sb.forEach(p => {
         const dt = fmtDate(p.period_date);
         const evP = scMap[dt];
-        if (evP && p.planned_cum_cost > 0) {
-          data.push({ period: dt, value: round2(evP.actual_cum_cost / p.planned_cum_cost), series: 'SPI Trend' });
-        }
+        if (evP && p.planned_cum_cost > 0)
+          data.push({period:dt, value:round2(evP.actual_cum_cost/p.planned_cum_cost), series:'SPI Trend'});
       });
     }
 
     if (!data.length) {
       container.style.height = '80px';
-      container.innerHTML = '<p style="color:var(--text-secondary);padding:24px;text-align:center">No S-curve data available</p>';
+      container.innerHTML = '<p style="color:var(--text-muted);padding:24px;text-align:center">No S-curve data available</p>';
       return;
     }
     container.style.height = '300px';
-
-    if (view === 'periodic') {
-      renderG2Bar(container.id, data, 'period', 'value', 'series', 300);
+    const chartType = view === 'periodic' ? 'bar' : 'line';
+    if (typeof G2 !== 'undefined') {
+      if (view === 'periodic') renderG2Bar(container.id, data, 'period', 'value', 'series', 300);
+      else renderG2Line(container.id, data, 'period', 'value', 'series', 300);
     } else {
-      renderG2Line(container.id, data, 'period', 'value', 'series', 300);
+      renderSVGChart(container.id, data, chartType, 300);
     }
   }
 
@@ -1457,11 +1586,17 @@ function renderEV(el) {
     const data = [];
     sb.forEach((p, i) => {
       const dt = fmtDate(p.period_date);
-      data.push({ period: dt, value: p.planned_periodic_cost || 0, series: 'PV' });
+      if (p.planned_periodic_cost) data.push({period:dt, value:p.planned_periodic_cost||0, series:'PV'});
       const evP = sc[i];
-      if (evP) data.push({ period: dt, value: evP.actual_periodic_cost || 0, series: 'EV' });
+      if (evP && evP.actual_periodic_cost) data.push({period:dt, value:evP.actual_periodic_cost||0, series:'EV'});
     });
-    if (data.length) renderG2Bar('evm-interval-chart', data, 'period', 'value', 'series', 260);
+    if (!data.length) {
+      container.style.height = '60px';
+      container.innerHTML = '<p style="color:var(--text-muted);padding:16px;text-align:center">No interval data</p>';
+      return;
+    }
+    if (typeof G2 !== 'undefined') renderG2Bar('evm-interval-chart', data, 'period', 'value', 'series', 260);
+    else renderSVGChart('evm-interval-chart', data, 'bar', 260);
   }
 
   // Toggle buttons
@@ -1558,43 +1693,43 @@ function renderResources(el) {
 
 function renderResChart(type) {
   const rd = window._resData || {};
-  const data  = (type === 'manpower' ? rd.manpower : rd.equipment) || [];
-  const peak  = type === 'manpower' ? rd.manPeak : rd.eqPeak;
-  const avg   = type === 'manpower' ? rd.manAvg  : rd.eqAvg;
+  const data = (type === 'manpower' ? rd.manpower : rd.equipment) || [];
+  const peak = type === 'manpower' ? rd.manPeak : rd.eqPeak;
+  const avg  = type === 'manpower' ? rd.manAvg  : rd.eqAvg;
 
   const container = document.getElementById('res-chart-container');
-  if (!container || !data.length) {
-    if (container) container.innerHTML = '<p style="padding:1rem;color:var(--text-muted)">No resource data.</p>';
-    return;
-  }
-  container.innerHTML = '';
-  if (typeof G2 === 'undefined') {
-    container.innerHTML = '<p style="padding:1rem;color:var(--text-muted)">Chart unavailable (CDN unreachable)</p>';
+  if (!container) return;
+  if (!data.length) {
+    container.innerHTML = '<p style="padding:1.5rem;color:var(--text-muted);text-align:center">No resource loading data for this type.</p>';
     return;
   }
 
-  const chart = new G2.Chart({ container: 'res-chart-container', autoFit: true, height: 320 });
-  chart.options({
-    type: 'view',
-    data: data.map(d => ({ period: d.period, qty: d.qty, cat: d.is_peak ? 'Peak' : d.above_avg ? 'Above Avg' : 'Normal' })),
-    children: [
-      {
-        type: 'interval',
-        encode: { x: 'period', y: 'qty', color: 'cat' },
-        scale: { color: { domain: ['Peak','Above Avg','Normal'], range: ['#dc2626','#d97706','#94a3b8'] } },
-        style: { radius: [2,2,0,0] },
-        axis: { x: { labelAutoRotate: true, labelFontSize: 10 }, y: { grid: true } },
-      },
-      {
-        type: 'line',
-        data: data.map(d => ({ period: d.period, avg })),
-        encode: { x: 'period', y: 'avg' },
-        style: { stroke: '#0f172a', strokeDasharray: '4,3', lineWidth: 1.5 },
-      }
-    ],
-    legend: { color: { position: 'top-right', size: 10 } },
-  });
-  chart.render();
+  const maxQty = Math.max(...data.map(d => d.qty)) || 1;
+  const avgPctH = avg ? (avg / maxQty * 100) : 0;
+
+  const barsHtml = data.map(d => {
+    const hPct = (d.qty / maxQty * 100).toFixed(1);
+    const barColor = d.is_peak ? '#dc2626' : d.above_avg ? '#d97706' : '#94a3b8';
+    const period = d.period || '';
+    const label = period.slice(5); // MM
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;min-width:0;cursor:default" title="${period}: ${d.qty}">
+      <div style="font-size:.6rem;color:var(--text-muted);margin-bottom:2px;white-space:nowrap">${d.qty > 0 && d.is_peak ? '<b>'+Math.round(d.qty)+'</b>' : ''}</div>
+      <div style="width:100%;flex:1;display:flex;align-items:flex-end">
+        <div style="width:100%;height:${hPct}%;background:${barColor};border-radius:3px 3px 0 0;min-height:2px;transition:height .3s"></div>
+      </div>
+      <div style="font-size:7px;color:var(--text-muted);margin-top:2px;white-space:nowrap">${label}</div>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div style="display:flex;flex-direction:column;height:320px;padding:8px 12px 4px">
+      <div style="flex:1;display:flex;align-items:flex-end;gap:2px;position:relative;padding-bottom:2px">
+        ${barsHtml}
+        ${avgPctH > 0 ? `<div style="position:absolute;left:0;right:0;bottom:${avgPctH.toFixed(1)}%;border-top:2px dashed #0f172a;pointer-events:none">
+          <span style="position:absolute;right:0;top:-14px;font-size:8px;color:var(--text-muted);background:var(--bg);padding:0 2px">avg ${Math.round(avg)}</span>
+        </div>` : ''}
+      </div>
+    </div>`;
 }
 
 /* ── Tab: Gantt Chart ─────────────────────────────────────────────────────── */

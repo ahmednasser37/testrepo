@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from flask import Flask, request, render_template, Response, redirect, url_for, stream_with_context
+from flask import Flask, request, render_template, Response, redirect, url_for, stream_with_context, jsonify
 
 from xer_parser import parse_xer_bytes_to_df, extract_data_date
 from comparison_engine import compare_schedules
@@ -290,32 +290,39 @@ def index():
 
 @app.route("/compare", methods=["POST"])
 def compare():
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+    def _err(msg, status=400):
+        if is_ajax:
+            return jsonify({"error": msg}), status
+        return render_template("index.html", error=msg)
+
     baseline_file = request.files.get("baseline")
     updated_file  = request.files.get("updated")
 
     if not baseline_file or not baseline_file.filename:
-        return render_template("index.html", error="Please upload the baseline XER file.")
+        return _err("Please upload the baseline XER file.")
     if not updated_file or not updated_file.filename:
-        return render_template("index.html", error="Please upload the updated XER file.")
+        return _err("Please upload the updated XER file.")
     if not _allowed(baseline_file.filename):
-        return render_template("index.html", error="Baseline file must be a .xer file.")
+        return _err("Baseline file must be a .xer file.")
     if not _allowed(updated_file.filename):
-        return render_template("index.html", error="Updated file must be a .xer file.")
+        return _err("Updated file must be a .xer file.")
 
     baseline_bytes = baseline_file.read()
     updated_bytes  = updated_file.read()
 
     if not baseline_bytes:
-        return render_template("index.html", error="Baseline file is empty.")
+        return _err("Baseline file is empty.")
     if not updated_bytes:
-        return render_template("index.html", error="Updated file is empty.")
+        return _err("Updated file is empty.")
 
     # Compute cache key before parsing (we free the raw bytes after to save RAM)
     try:
         ck    = cache_key(baseline_bytes, updated_bytes)
         key16 = ck[:16]
     except Exception as exc:
-        return render_template("index.html", error=f"Failed to hash XER files: {exc}")
+        return _err(f"Failed to hash XER files: {exc}")
 
     try:
         baseline_tables, bl_warnings = parse_xer_bytes_to_df(baseline_bytes)
@@ -323,7 +330,6 @@ def compare():
         # Free raw bytes immediately — they can be 40-80 MB each
         del baseline_bytes, updated_bytes
 
-        # Log parser warnings for debugging (visible in HF Space logs)
         for w in bl_warnings:
             app.logger.warning("[Baseline XER] %s", w)
         for w in up_warnings:
@@ -336,22 +342,26 @@ def compare():
             ("TASK",    updated_tables,  "Updated"),
         ]:
             if name not in tables or tables[name].empty:
-                return render_template("index.html",
-                    error=f"{label} file is missing the {name} table.")
+                return _err(f"{label} file is missing the {name} table.")
     except Exception as exc:
-        return render_template("index.html", error=f"Failed to parse XER files: {exc}")
+        return _err(f"Failed to parse XER files: {exc}")
 
     try:
         # Return cached dashboard if it exists
+        dest = url_for("dashboard", key=key16)
         if _full_path(key16).exists():
-            return redirect(url_for("dashboard", key=key16))
+            if is_ajax:
+                return jsonify({"redirect": dest})
+            return redirect(dest)
 
         full_data = _build_full_data(ck, baseline_tables, updated_tables)
         _save_full(key16, full_data)
-        return redirect(url_for("dashboard", key=key16))
+        if is_ajax:
+            return jsonify({"redirect": dest})
+        return redirect(dest)
 
     except Exception as exc:
-        return render_template("index.html", error=f"Comparison failed: {exc}")
+        return _err(f"Comparison failed: {exc}")
 
 
 @app.route("/r/<key>")

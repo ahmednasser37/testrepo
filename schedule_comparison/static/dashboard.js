@@ -248,32 +248,31 @@ function activateTab(name) {
   panel.classList.add('active');
   panel.setAttribute('aria-hidden', 'false');
 
-  // Render if not yet done
-  if (!rendered.has(name)) {
-    rendered.add(name);
-    const renderers = {
-      overview:    renderOverview,
-      schedule:    renderSchedule,
-      kpis:        renderKPIs,
-      lookahead:   renderLookahead,
-      milestones:  renderMilestones,
-      procurement: renderProcurement,
-      ev:          renderEV,
-      resources:   renderResources,
-      gantt:       renderGantt,
-      wbs:         renderWBS,
-      logic:       renderLogic,
-      chat:        renderChat,
-    };
-    if (renderers[name]) renderers[name](panel);
-  }
+  // Render if not yet done (lazy — each tab renders once)
+  if (rendered.has(name)) return;
+  rendered.add(name);
+  const renderers = {
+    overview:    renderOverview,
+    schedule:    renderSchedule,
+    kpis:        renderKPIs,
+    lookahead:   renderLookahead,
+    milestones:  renderMilestones,
+    procurement: renderProcurement,
+    ev:          renderEV,
+    resources:   renderResources,
+    gantt:       renderGantt,
+    wbs:         renderWBS,
+    logic:       renderLogic,
+    chat:        renderChat,
+  };
+  if (renderers[name]) renderers[name](panel);
 }
 
 /* ── Command Center: Drawer helper ───────────────────────────────────────── */
 
 function openDrawer(title, bodyHtml) {
   document.getElementById('cc-drawer-title').textContent = title;
-  document.getElementById('cc-drawer-body').innerHTML = bodyHtml;
+  document.getElementById('cc-drawer-body').innerHTML = '<div class="drawer-content">' + bodyHtml + '</div>';
   document.getElementById('cc-drawer').classList.add('open');
   document.getElementById('cc-drawer-overlay').classList.add('open');
 }
@@ -371,7 +370,7 @@ function renderOverview(el) {
     </div>
 
     <!-- 10 Chart Cards -->
-    <div class="cc-charts-grid">
+    <div class="cc-charts-grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">
 
       <!-- 1. S-Curve (WIDE) -->
       <div class="cc-chart-card cc-chart-card--wide" id="chart-card-scurve" tabindex="0" role="button">

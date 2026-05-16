@@ -655,13 +655,20 @@ def process(tables: dict) -> dict[str, pd.DataFrame]:
     activities, wbs, resources, project_info, scurve
     """
     project = tables.get("PROJECT", pd.DataFrame())
+    data_date = None
     if not project.empty:
-        data_date = pd.to_datetime(
-            project.iloc[0].get("data_date"), errors="coerce"
-        )
-        if pd.isna(data_date):
-            data_date = pd.Timestamp.now().normalize()
-    else:
+        row = project.iloc[0]
+        for col in ("last_recalc_date", "data_date"):
+            val = row.get(col)
+            if val is not None:
+                try:
+                    ts = pd.to_datetime(val, errors="coerce")
+                    if not pd.isna(ts):
+                        data_date = ts
+                        break
+                except Exception:
+                    pass
+    if data_date is None:
         data_date = pd.Timestamp.now().normalize()
 
     activities_df = build_activities(tables, data_date)

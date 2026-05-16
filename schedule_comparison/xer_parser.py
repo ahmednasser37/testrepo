@@ -69,7 +69,9 @@ def _decode_bytes(raw: bytes) -> tuple[str, list[str]]:
 def parse_xer_bytes(raw: bytes) -> ParseResult:
     """Parse raw XER bytes into a ParseResult (list-of-dicts tables)."""
     text, warnings = _decode_bytes(raw)
-    return _parse_text(text, warnings)
+    result = _parse_text(text, warnings)
+    del text  # free the decoded string — can be 40 MB+ for large XER files
+    return result
 
 
 def _parse_text(text: str, warnings: List[str]) -> ParseResult:
@@ -231,14 +233,25 @@ def parse_xer_bytes_to_df(raw: bytes) -> tuple[dict[str, pd.DataFrame], list[str
 
 
 def extract_data_date(tables: dict[str, pd.DataFrame]) -> pd.Timestamp | None:
-    """Return the data_date from the PROJECT table, or None if unavailable."""
+    """Return the data date from the PROJECT table.
+
+    P6 XER files store it as ``last_recalc_date``; test/synthetic XERs may use
+    a ``data_date`` column.  We check both, preferring ``last_recalc_date``.
+    """
     project = tables.get("PROJECT", pd.DataFrame())
-    if project.empty or "data_date" not in project.columns:
+    if project.empty:
         return None
-    val = project.iloc[0].get("data_date")
-    if pd.isna(val):
-        return None
-    return pd.Timestamp(val) if not isinstance(val, pd.Timestamp) else val
+    row = project.iloc[0]
+    for col in ("last_recalc_date", "data_date"):
+        val = row.get(col)
+        if val is not None and not (isinstance(val, float) and pd.isna(val)):
+            try:
+                ts = pd.Timestamp(val)
+                if not pd.isna(ts):
+                    return ts
+            except Exception:
+                pass
+    return None
 
 
 def extract_project_meta(tables: dict[str, pd.DataFrame]) -> dict:

@@ -29,7 +29,7 @@ from path_engine import compute_longest_path
 app = Flask(__name__)
 app.secret_key = os.environ.get("SCE_SECRET_KEY", "dev-secret-change-in-production")
 
-_UPLOAD_MAX_MB = int(os.environ.get("SCE_UPLOAD_MAX_MB", 50))
+_UPLOAD_MAX_MB = int(os.environ.get("SCE_UPLOAD_MAX_MB", 200))
 app.config["MAX_CONTENT_LENGTH"] = _UPLOAD_MAX_MB * 1024 * 1024
 
 _CACHE_DIR         = Path(os.environ.get("SCE_CACHE_DIR", "/tmp/sce_cache"))
@@ -77,8 +77,6 @@ def _build_full_data(
     ck: str,
     baseline_tables: dict,
     updated_tables: dict,
-    baseline_bytes: bytes,
-    updated_bytes: bytes,
 ) -> dict:
     """Run all engines and return a single JSON-serializable dict."""
     key16 = ck[:16]
@@ -312,9 +310,18 @@ def compare():
     if not updated_bytes:
         return render_template("index.html", error="Updated file is empty.")
 
+    # Compute cache key before parsing (we free the raw bytes after to save RAM)
+    try:
+        ck    = cache_key(baseline_bytes, updated_bytes)
+        key16 = ck[:16]
+    except Exception as exc:
+        return render_template("index.html", error=f"Failed to hash XER files: {exc}")
+
     try:
         baseline_tables, bl_warnings = parse_xer_bytes_to_df(baseline_bytes)
         updated_tables,  up_warnings = parse_xer_bytes_to_df(updated_bytes)
+        # Free raw bytes immediately — they can be 40-80 MB each
+        del baseline_bytes, updated_bytes
 
         # Log parser warnings for debugging (visible in HF Space logs)
         for w in bl_warnings:
@@ -335,15 +342,11 @@ def compare():
         return render_template("index.html", error=f"Failed to parse XER files: {exc}")
 
     try:
-        ck    = cache_key(baseline_bytes, updated_bytes)
-        key16 = ck[:16]
-
         # Return cached dashboard if it exists
         if _full_path(key16).exists():
             return redirect(url_for("dashboard", key=key16))
 
-        full_data = _build_full_data(ck, baseline_tables, updated_tables,
-                                     baseline_bytes, updated_bytes)
+        full_data = _build_full_data(ck, baseline_tables, updated_tables)
         _save_full(key16, full_data)
         return redirect(url_for("dashboard", key=key16))
 

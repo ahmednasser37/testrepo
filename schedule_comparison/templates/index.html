@@ -151,7 +151,7 @@
           <button type="submit" class="btn-primary" id="submit-btn">
             Compare Schedules
           </button>
-          <span class="submit-hint">Supports files up to 100 MB each</span>
+          <span class="submit-hint">Supports files up to 200 MB each</span>
         </div>
       </form>
     </div>
@@ -188,7 +188,7 @@
           <li>Primavera P6 .XER format</li>
           <li>Must contain PROJECT table</li>
           <li>Must contain TASK table</li>
-          <li>Max 100 MB per file</li>
+          <li>Max 200 MB per file</li>
           <li>UTF-8 or Latin-1 encoding</li>
         </ul>
       </div>
@@ -386,7 +386,7 @@
           // Non-JSON success response (shouldn't happen)
           window.location.href = '/';
         } else if (xhr.status === 413) {
-          showError('Files are too large. Maximum 100 MB per file.');
+          showError('Files are too large. Maximum 200 MB per file.');
         } else {
           try {
             var res = JSON.parse(xhr.responseText);

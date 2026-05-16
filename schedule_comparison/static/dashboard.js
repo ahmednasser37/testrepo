@@ -276,9 +276,16 @@ function activateTab(name) {
   if (rendered.has(name)) return;
   rendered.add(name);
   const renderers = {
+    executive:   renderOverview,
     overview:    renderOverview,
+    scurve:      renderSchedule,
     schedule:    renderSchedule,
+    spitrends:   renderKPIs,
     kpis:        renderKPIs,
+    drilldown:   renderWBS,
+    trade:       renderLogic,
+    manpower:    renderResources,
+    slip:        renderLookahead,
     lookahead:   renderLookahead,
     milestones:  renderMilestones,
     procurement: renderProcurement,
@@ -295,10 +302,14 @@ function activateTab(name) {
 /* ── Command Center: Drawer helper ───────────────────────────────────────── */
 
 function openDrawer(title, bodyHtml) {
-  document.getElementById('cc-drawer-title').textContent = title;
-  document.getElementById('cc-drawer-body').innerHTML = '<div class="drawer-content">' + bodyHtml + '</div>';
-  document.getElementById('cc-drawer').classList.add('open');
-  document.getElementById('cc-drawer-overlay').classList.add('open');
+  const titleEl   = document.getElementById('cc-drawer-title')   || document.getElementById('drawer-title');
+  const bodyEl    = document.getElementById('cc-drawer-body')    || document.getElementById('drawer-body');
+  const drawerEl  = document.getElementById('cc-drawer')         || document.getElementById('drawer');
+  const overlayEl = document.getElementById('cc-drawer-overlay') || document.getElementById('drawer-overlay');
+  if (titleEl)   titleEl.textContent = title;
+  if (bodyEl)    bodyEl.innerHTML = '<div class="drawer-content">' + bodyHtml + '</div>';
+  if (drawerEl)  drawerEl.classList.add('open');
+  if (overlayEl) overlayEl.classList.add('active');
 }
 
 function drawerTable(headers, rows) {
@@ -568,61 +579,89 @@ function renderOverview(el) {
   // Delay bar max
   const maxDelay = top10delayed.length ? top10delayed[0].finish_variance_days : 1;
 
+  // KPI ribbon items
+  const spiDisp  = spi  != null ? fmt(spi, 2)  : '—';
+  const cpiDisp  = cpi  != null ? fmt(cpi, 2)  : '—';
+  const spiKpiCl = spi  == null ? '' : spi  >= 1   ? 'kpi-green'  : spi  >= 0.8 ? 'kpi-amber' : 'kpi-red';
+  const cpiKpiCl = cpi  == null ? '' : cpi  >= 1   ? 'kpi-green'  : cpi  >= 0.8 ? 'kpi-amber' : 'kpi-red';
+  const floatDisp  = K.float_consumption_days != null ? fmt(K.float_consumption_days, 1) + 'd' : '—';
+  const floatKpiCl = K.float_consumption_days == null ? '' : K.float_consumption_days > 5 ? 'kpi-red' : K.float_consumption_days >= 1 ? 'kpi-amber' : 'kpi-green';
+  const delayDisp  = K.schedule_delay_days != null ? fmt(K.schedule_delay_days, 0) + 'd' : '—';
+  const delayKpiCl = K.schedule_delay_days == null ? '' : K.schedule_delay_days <= 0 ? 'kpi-green' : K.schedule_delay_days <= 14 ? 'kpi-amber' : 'kpi-red';
+  const pctDisp    = K.pct_complete_weighted != null ? fmt(K.pct_complete_weighted, 1) + '%' : '—';
+  const pctKpiCl   = K.pct_complete_weighted == null ? '' : K.pct_complete_weighted > 60 ? 'kpi-green' : K.pct_complete_weighted >= 30 ? 'kpi-amber' : 'kpi-red';
+
   // ── HTML ─────────────────────────────────────────────────────────────────
   el.innerHTML = `
-    <!-- 4 stat cards -->
-    <div class="ov-panel-row">
+    <!-- KPI ribbon -->
+    <div class="ov-kpi-ribbon">
+      <div class="kpi-item">
+        <div class="kpi-item-val ${spiKpiCl}">${spiDisp}</div>
+        <div class="kpi-item-lbl">SPI</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-item-val ${cpiKpiCl}">${cpiDisp}</div>
+        <div class="kpi-item-lbl">CPI</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-item-val ${floatKpiCl}">${floatDisp}</div>
+        <div class="kpi-item-lbl">Float Consumed</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-item-val ${delayKpiCl}">${delayDisp}</div>
+        <div class="kpi-item-lbl">Schedule Delay</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-item-val ${pctKpiCl}">${pctDisp}</div>
+        <div class="kpi-item-lbl">% Complete</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-item-val">${S.total_updated || variances.length || '—'}</div>
+        <div class="kpi-item-lbl">Total Activities</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-item-val ${(completedN/(variances.length||1))>0.5?'kpi-green':'kpi-amber'}">${completedN}</div>
+        <div class="kpi-item-lbl">Completed</div>
+      </div>
+      <div class="kpi-item">
+        <div class="kpi-item-val kpi-blue">${activeN}</div>
+        <div class="kpi-item-lbl">In Progress</div>
+      </div>
+    </div>
+
+    <!-- 4 stat cards (vue-element-admin style) -->
+    <div class="stat-cards-row">
 
       <!-- Card 1: Avg Finish Delay -->
-      <div class="ov-panel ov-panel--${card1Color}" id="ov-card-1" tabindex="0" role="button" aria-label="Schedule delay detail">
-        <div class="ov-panel-body">
-          <div class="ov-panel-text">
-            <div class="ov-panel-value" id="ov-num-1">${finishDelay != null ? (finishDelay > 0 ? '+' : '') + fmt(finishDelay,1) + 'd' : '—'}</div>
-            <div class="ov-panel-name">Avg Finish Delay</div>
-            <div class="ov-panel-sub">${S.delayed_activities || 0} activities delayed &gt;5d</div>
-          </div>
-          <div class="ov-panel-icon-box" style="background:${card1Color==='red'?'#fde8e8':card1Color==='amber'?'#fef3c7':'#dcfce7'}">📅</div>
-        </div>
-        <div class="ov-panel-footer">Click to see delayed activities</div>
+      <div class="sc-stat-card sc-stat-card--${card1Color}" id="ov-card-1" tabindex="0" role="button" aria-label="Schedule delay detail">
+        <div class="sc-card-icon">📅</div>
+        <div class="sc-card-label">Avg Finish Delay</div>
+        <div class="sc-card-value" id="ov-num-1">${finishDelay != null ? (finishDelay > 0 ? '+' : '') + fmt(finishDelay,1) + 'd' : '—'}</div>
+        <div class="sc-card-sub">${S.delayed_activities || 0} activities delayed &gt;5d</div>
       </div>
 
       <!-- Card 2: Activity Changes -->
-      <div class="ov-panel ov-panel--amber" id="ov-card-2" tabindex="0" role="button" aria-label="Activity changes detail">
-        <div class="ov-panel-body">
-          <div class="ov-panel-text">
-            <div class="ov-panel-value" id="ov-num-2">${totalChanges}</div>
-            <div class="ov-panel-name">Activity Changes</div>
-            <div class="ov-panel-sub">+${S.added||0} added · −${S.deleted||0} deleted · ~${S.changed||0} changed</div>
-          </div>
-          <div class="ov-panel-icon-box" style="background:#fef3c7">📋</div>
-        </div>
-        <div class="ov-panel-footer">Click to see change details</div>
+      <div class="sc-stat-card sc-stat-card--amber" id="ov-card-2" tabindex="0" role="button" aria-label="Activity changes detail">
+        <div class="sc-card-icon">📋</div>
+        <div class="sc-card-label">Activity Changes</div>
+        <div class="sc-card-value" id="ov-num-2">${totalChanges}</div>
+        <div class="sc-card-sub">+${S.added||0} added · −${S.deleted||0} deleted · ~${S.changed||0} changed</div>
       </div>
 
       <!-- Card 3: Logic Changes -->
-      <div class="ov-panel ov-panel--blue" id="ov-card-3" tabindex="0" role="button" aria-label="Logic changes detail">
-        <div class="ov-panel-body">
-          <div class="ov-panel-text">
-            <div class="ov-panel-value" id="ov-num-3">${relChanges}</div>
-            <div class="ov-panel-name">Logic Changes</div>
-            <div class="ov-panel-sub">+${S.relationships_added||0} added · −${S.relationships_deleted||0} removed</div>
-          </div>
-          <div class="ov-panel-icon-box" style="background:#dbeafe">🔗</div>
-        </div>
-        <div class="ov-panel-footer">Click to see relationship changes</div>
+      <div class="sc-stat-card sc-stat-card--blue" id="ov-card-3" tabindex="0" role="button" aria-label="Logic changes detail">
+        <div class="sc-card-icon">🔗</div>
+        <div class="sc-card-label">Logic Changes</div>
+        <div class="sc-card-value" id="ov-num-3">${relChanges}</div>
+        <div class="sc-card-sub">+${S.relationships_added||0} added · −${S.relationships_deleted||0} removed</div>
       </div>
 
       <!-- Card 4: Critical Path -->
-      <div class="ov-panel ov-panel--${card4Color}" id="ov-card-4" tabindex="0" role="button" aria-label="Critical path detail">
-        <div class="ov-panel-body">
-          <div class="ov-panel-text">
-            <div class="ov-panel-value" id="ov-num-4">${critPct}%</div>
-            <div class="ov-panel-name">Critical Path</div>
-            <div class="ov-panel-sub">${critNum} critical activities</div>
-          </div>
-          <div class="ov-panel-icon-box" style="background:${card4Color==='purple'?'#ede9fe':card4Color==='amber'?'#fef3c7':'#dcfce7'}">⚠️</div>
-        </div>
-        <div class="ov-panel-footer">Click to see critical activities</div>
+      <div class="sc-stat-card sc-stat-card--${card4Color}" id="ov-card-4" tabindex="0" role="button" aria-label="Critical path detail">
+        <div class="sc-card-icon">⚠️</div>
+        <div class="sc-card-label">Critical Path</div>
+        <div class="sc-card-value" id="ov-num-4">${critPct}%</div>
+        <div class="sc-card-sub">${critNum} critical activities</div>
       </div>
 
     </div>
@@ -2331,15 +2370,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Hash change (browser back/forward)
   window.addEventListener('hashchange', () => {
-    const name = location.hash.slice(1) || 'overview';
+    const name = location.hash.slice(1) || 'executive';
     activateTab(name);
     const titleEl = document.getElementById('page-title');
     if (titleEl) titleEl.textContent = tabTitles[name] || name;
   });
 
-  // Initial render from hash (or default to overview)
-  const initial = location.hash.slice(1) || 'overview';
+  // Initial render from hash (or default to executive tab)
+  const initial = location.hash.slice(1) || 'executive';
   activateTab(initial);
+
+  // Drawer close handlers (works with both cc-drawer and drawer IDs)
+  function closeDrawer() {
+    const drawerEl  = document.getElementById('cc-drawer')         || document.getElementById('drawer');
+    const overlayEl = document.getElementById('cc-drawer-overlay') || document.getElementById('drawer-overlay');
+    if (drawerEl)  drawerEl.classList.remove('open');
+    if (overlayEl) { overlayEl.classList.remove('active'); overlayEl.classList.remove('open'); }
+  }
+  const drawerCloseBtn = document.getElementById('cc-drawer-close') || document.getElementById('drawer-close');
+  if (drawerCloseBtn) drawerCloseBtn.addEventListener('click', closeDrawer);
+  const drawerOverlayEl = document.getElementById('cc-drawer-overlay') || document.getElementById('drawer-overlay');
+  if (drawerOverlayEl) drawerOverlayEl.addEventListener('click', closeDrawer);
 
   // Set health badge
   initHealthBadge();

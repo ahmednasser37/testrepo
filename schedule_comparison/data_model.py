@@ -578,6 +578,7 @@ def build_resource_loading(tables: dict, activities_df: pd.DataFrame) -> dict:
                                 end=range_end + pd.Timedelta(days=31), freq="ME")
 
     man_by_period: dict = {p: 0.0 for p in periods}
+    man_act_by_period: dict = {p: 0.0 for p in periods}
     eq_by_period:  dict = {p: 0.0 for p in periods}
 
     for _, tr in taskrsrc.iterrows():
@@ -585,9 +586,10 @@ def build_resource_loading(tables: dict, activities_df: pd.DataFrame) -> dict:
         rid   = str(tr.get("rsrc_id", ""))
         rtype = rsrc_type_map.get(rid, "RT_Labor")
         qty   = float(tr.get("target_qty", 0) or 0)
+        act_qty = float(tr.get("act_reg_qty", 0) or 0) + float(tr.get("act_ot_qty", 0) or 0)
 
         dates = act_dates.get(tid)
-        if not dates or qty <= 0:
+        if not dates or (qty <= 0 and act_qty <= 0):
             continue
 
         ps, pf = dates
@@ -604,17 +606,23 @@ def build_resource_loading(tables: dict, activities_df: pd.DataFrame) -> dict:
 
             overlap_days = (overlap_end - overlap_start).days
             period_qty   = qty * (overlap_days / span_days)
+            period_act_qty = act_qty * (overlap_days / span_days)
 
             if rtype == "RT_Equip":
                 eq_by_period[p]  = eq_by_period.get(p, 0)  + period_qty
             else:
                 man_by_period[p] = man_by_period.get(p, 0) + period_qty
+                man_act_by_period[p] = man_act_by_period.get(p, 0) + period_act_qty
 
-    def _to_list(by_period: dict) -> list[dict]:
-        return [
-            {"period": p.strftime("%Y-%m"), "qty": round(v, 0)}
-            for p, v in sorted(by_period.items())
-        ]
+    def _to_list(by_period: dict, act_by_period: dict = None) -> list[dict]:
+        result = []
+        for p, v in sorted(by_period.items()):
+            entry = {"period": p.strftime("%Y-%m"), "qty": round(v, 0)}
+            if act_by_period is not None:
+                entry["planned_qty"] = round(v, 0)
+                entry["act_qty"] = round(act_by_period.get(p, 0.0), 0)
+            result.append(entry)
+        return result
 
     def _stats(lst: list[dict]):
         qtys = [x["qty"] for x in lst if x["qty"] > 0]
@@ -624,7 +632,7 @@ def build_resource_loading(tables: dict, activities_df: pd.DataFrame) -> dict:
         pk  = max(qtys)
         return round(pk, 0), round(avg, 0)
 
-    man_list = _to_list(man_by_period)
+    man_list = _to_list(man_by_period, man_act_by_period)
     eq_list  = _to_list(eq_by_period)
     man_peak, man_avg = _stats(man_list)
     eq_peak,  eq_avg  = _stats(eq_list)

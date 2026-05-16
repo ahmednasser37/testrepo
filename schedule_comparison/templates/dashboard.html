@@ -3,190 +3,103 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ data.project.updated_name or "P6 Compare" }} — Schedule Dashboard</title>
+  <title>P6 Compare — {{ data.project.updated_name or 'Dashboard' }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
-  <script>
-    window.__DASH__ = {{ data | tojson }};
-    window.__KEY__ = "{{ key }}";
-  </script>
 </head>
-<body>
-  <div class="app-shell">
+<body class="app dark">
 
-    <!-- ── Sidebar ── -->
-    <aside class="sidebar" id="sidebar">
-      <div class="sidebar-brand">
-        <div class="sidebar-brand-icon">P6</div>
-        <span class="sidebar-brand-name">P6 Compare</span>
-      </div>
-
-      <nav class="sidebar-nav">
-        <div class="sidebar-section-label">Analysis</div>
-        <button class="nav-item active" data-tab="overview">
-          <span class="nav-icon">◈</span>
-          <span class="nav-label">Overview</span>
-        </button>
-        <button class="nav-item" data-tab="schedule">
-          <span class="nav-icon">≡</span>
-          <span class="nav-label">Schedule</span>
-        </button>
-        <button class="nav-item" data-tab="kpis">
-          <span class="nav-icon">◎</span>
-          <span class="nav-label">KPIs</span>
-        </button>
-        <button class="nav-item" data-tab="ev">
-          <span class="nav-icon">$</span>
-          <span class="nav-label">Earned Value</span>
-        </button>
-        <div class="sidebar-section-label">Planning</div>
-        <button class="nav-item" data-tab="lookahead">
-          <span class="nav-icon">→</span>
-          <span class="nav-label">Lookahead</span>
-        </button>
-        <button class="nav-item" data-tab="milestones">
-          <span class="nav-icon">◆</span>
-          <span class="nav-label">Milestones</span>
-        </button>
-        <button class="nav-item" data-tab="gantt">
-          <span class="nav-icon">▬</span>
-          <span class="nav-label">Gantt</span>
-        </button>
-        <div class="sidebar-section-label">Resources</div>
-        <button class="nav-item" data-tab="procurement">
-          <span class="nav-icon">⊞</span>
-          <span class="nav-label">Procurement</span>
-        </button>
-        <button class="nav-item" data-tab="resources">
-          <span class="nav-icon">↑</span>
-          <span class="nav-label">Resources</span>
-        </button>
-        <div class="sidebar-section-label">Intelligence</div>
-        <button class="nav-item" data-tab="wbs">
-          <span class="nav-icon">⊢</span>
-          <span class="nav-label">WBS</span>
-        </button>
-        <button class="nav-item" data-tab="logic">
-          <span class="nav-icon">⤳</span>
-          <span class="nav-label">Logic</span>
-        </button>
-        <button class="nav-item" data-tab="chat">
-          <span class="nav-icon">✦</span>
-          <span class="nav-label">AI Chat</span>
-        </button>
-      </nav>
-
-      <div class="sidebar-footer">
-        <button class="collapse-btn" id="collapse-btn" onclick="toggleSidebar()">‹ Collapse</button>
-      </div>
-    </aside>
-
-    <!-- ── Main ── -->
-    <div class="main-area">
-
-      <!-- Topbar -->
-      <header class="topbar">
-        <div class="topbar-left">
-          <span class="page-title" id="page-title">Overview</span>
-          <div class="project-crumb">
-            <span class="crumb-name">{{ data.project.baseline_name or "Baseline" }}</span>
-            <span class="crumb-arrow">→</span>
-            <span class="crumb-name">{{ data.project.updated_name or "Updated" }}</span>
-            {% if data.project.data_date_warning %}
-            <span class="warn-chip">⚠ Dates differ</span>
-            {% endif %}
-          </div>
-        </div>
-        <div class="topbar-right">
-          <span class="health-badge unknown" id="health-badge">—</span>
-          <a href="/export/csv?key={{ key }}" class="btn-secondary">↓ CSV</a>
-          <a href="/export/json?key={{ key }}" class="btn-secondary">↓ JSON</a>
-          <button class="btn-report" onclick="openReportModal()">📄 Report</button>
-          <a href="/" class="btn-secondary">+ New</a>
-        </div>
-      </header>
-
-      <!-- Content -->
-      <main class="content-area">
-        <div id="panel-overview"    class="tab-panel active"></div>
-        <div id="panel-schedule"    class="tab-panel"></div>
-        <div id="panel-kpis"        class="tab-panel"></div>
-        <div id="panel-ev"          class="tab-panel"></div>
-        <div id="panel-lookahead"   class="tab-panel"></div>
-        <div id="panel-milestones"  class="tab-panel"></div>
-        <div id="panel-gantt"       class="tab-panel"></div>
-        <div id="panel-procurement" class="tab-panel"></div>
-        <div id="panel-resources"   class="tab-panel"></div>
-        <div id="panel-wbs"         class="tab-panel"></div>
-        <div id="panel-logic"       class="tab-panel"></div>
-        <div id="panel-chat"        class="tab-panel"></div>
-      </main>
+  <!-- LEFT SIDEBAR: brand + nav + slicer -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-icon">&#9889;</span>
+      <span class="brand-name">P6 Compare</span>
     </div>
-  </div>
 
-  <!-- Drawer -->
-  <div id="cc-drawer-overlay" class="cc-drawer-overlay"></div>
-  <aside id="cc-drawer" class="cc-drawer" role="dialog" aria-modal="true" aria-labelledby="cc-drawer-title">
-    <div class="cc-drawer-header">
-      <span class="cc-drawer-title" id="cc-drawer-title">Detail</span>
-      <button class="cc-drawer-close" id="cc-drawer-close" aria-label="Close">✕</button>
+    <nav class="sidebar-nav" role="navigation" aria-label="Dashboard tabs">
+      <button class="nav-item active" data-tab="executive"   aria-selected="true">
+        <span class="nav-icon">&#128202;</span><span class="nav-label">Executive</span>
+      </button>
+      <button class="nav-item" data-tab="scurve"      aria-selected="false">
+        <span class="nav-icon">&#128200;</span><span class="nav-label">S-Curve</span>
+      </button>
+      <button class="nav-item" data-tab="spitrends"   aria-selected="false">
+        <span class="nav-icon">&#128201;</span><span class="nav-label">SPI / CPI</span>
+      </button>
+      <button class="nav-item" data-tab="drilldown"   aria-selected="false">
+        <span class="nav-icon">&#128193;</span><span class="nav-label">Drilldown</span>
+      </button>
+      <button class="nav-item" data-tab="trade"       aria-selected="false">
+        <span class="nav-icon">&#128300;</span><span class="nav-label">Trade Analysis</span>
+      </button>
+      <button class="nav-item" data-tab="manpower"    aria-selected="false">
+        <span class="nav-icon">&#128119;</span><span class="nav-label">Manpower</span>
+      </button>
+      <button class="nav-item" data-tab="slip"        aria-selected="false">
+        <span class="nav-icon">&#9201;</span><span class="nav-label">Slip Detail</span>
+      </button>
+    </nav>
+
+    <!-- WBS Slicer Engine -->
+    <div class="slicer-panel" id="slicer-panel">
+      <div class="slicer-hd">
+        <span class="slicer-title">FILTERS</span>
+        <button class="slicer-reset-btn" id="slicer-reset">RESET ALL</button>
+      </div>
+      <div class="slicer-body" id="slicer-body">
+        <!-- JS fills slicer dropdowns dynamically based on WBS hierarchy depth -->
+      </div>
     </div>
-    <div class="cc-drawer-body" id="cc-drawer-body"></div>
+
+    <div class="sidebar-footer">
+      <a href="/export/csv?key={{ key }}" class="sidebar-export-btn">&#8595; CSV</a>
+      <a href="/export/json?key={{ key }}" class="sidebar-export-btn">&#8595; JSON</a>
+      <a href="/" class="sidebar-export-btn">+ New</a>
+    </div>
+    <button class="collapse-btn" id="collapse-btn" aria-label="Collapse sidebar">&#8249;</button>
   </aside>
 
-  <!-- Report Modal -->
-  <div id="report-modal-overlay" class="report-modal-overlay" style="display:none" onclick="closeReportModal()"></div>
-  <div id="report-modal" class="report-modal" style="display:none">
-    <div class="report-modal-header">
-      <span class="report-modal-title">📄 Report Generator</span>
-      <button class="report-modal-close" onclick="closeReportModal()">✕</button>
-    </div>
-    <div class="report-modal-body">
-      <div class="report-format-label">REPORT FORMAT</div>
-      <div class="report-format-grid">
-        <label class="report-format-card selected" id="fmt-pdf">
-          <input type="radio" name="report-fmt" value="pdf" checked style="display:none">
-          <span class="report-format-icon">📄</span>
-          <div><div class="report-format-name">PDF</div><div class="report-format-desc">Print-ready report</div></div>
-        </label>
-        <label class="report-format-card" id="fmt-csv">
-          <input type="radio" name="report-fmt" value="csv" style="display:none">
-          <span class="report-format-icon">📊</span>
-          <div><div class="report-format-name">Excel / CSV</div><div class="report-format-desc">Data spreadsheet</div></div>
-        </label>
+  <!-- MAIN: topbar + tab panels -->
+  <div class="main-area" id="main-area">
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 class="page-heading" id="page-heading">Executive Overview</h1>
+        <div class="project-crumb" id="project-crumb">
+          <span class="crumb crumb-baseline">{{ data.project.baseline_name or 'Baseline' }}</span>
+          <span class="crumb-arrow">&#8594;</span>
+          <span class="crumb crumb-updated">{{ data.project.updated_name or 'Updated' }}</span>
+        </div>
       </div>
-      <div class="report-sections-label">SECTIONS TO INCLUDE</div>
-      <div class="report-sections-list">
-        <label class="report-section-item"><input type="checkbox" name="rpt-sec" value="kpi" checked> <div><span>KPI Summary</span><small>SPI, CPI, % complete, activity counts</small></div></label>
-        <label class="report-section-item"><input type="checkbox" name="rpt-sec" value="scurve" checked> <div><span>S-Curve Data</span><small>Planned vs Earned vs Actual values</small></div></label>
-        <label class="report-section-item"><input type="checkbox" name="rpt-sec" value="critical"> <div><span>Critical Path</span><small>Zero-float &amp; critical activities</small></div></label>
-        <label class="report-section-item"><input type="checkbox" name="rpt-sec" value="lookahead" checked> <div><span>4-Week Lookahead</span><small>Upcoming activities next 4 weeks</small></div></label>
-        <label class="report-section-item"><input type="checkbox" name="rpt-sec" value="variances" checked> <div><span>Activity Variances</span><small>All schedule changes</small></div></label>
+      <div class="topbar-right">
+        <span class="health-badge" id="health-badge"></span>
+        <span class="data-date-chip" id="data-date-chip">Data Date: &#8212;</span>
+        <span class="filter-active-chip" id="filter-chip" style="display:none">Filtered</span>
       </div>
-      <button class="report-generate-btn" id="report-generate-btn">Generate Report</button>
-    </div>
+    </header>
+
+    <main class="content-area" id="content-area">
+      <!-- Tab panels injected by JS -->
+      <div class="tab-panel active" id="panel-executive"  role="tabpanel"></div>
+      <div class="tab-panel"        id="panel-scurve"     role="tabpanel"></div>
+      <div class="tab-panel"        id="panel-spitrends"  role="tabpanel"></div>
+      <div class="tab-panel"        id="panel-drilldown"  role="tabpanel"></div>
+      <div class="tab-panel"        id="panel-trade"      role="tabpanel"></div>
+      <div class="tab-panel"        id="panel-manpower"   role="tabpanel"></div>
+      <div class="tab-panel"        id="panel-slip"       role="tabpanel"></div>
+    </main>
   </div>
 
-  <script src="https://unpkg.com/@antv/g2@5/dist/g2.min.js"></script>
+  <div class="drawer-overlay" id="drawer-overlay"></div>
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-hd" id="drawer-hd">
+      <span id="drawer-title"></span>
+      <button class="drawer-close" id="drawer-close" aria-label="Close">&#10005;</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <script>window.__DASH__={{ data|tojson }};window.__KEY__="{{ key }}";</script>
   <script src="/static/dashboard.js"></script>
-  <script>
-    // Sidebar collapse
-    function toggleSidebar() {
-      var s = document.getElementById('sidebar');
-      var btn = document.getElementById('collapse-btn');
-      s.classList.toggle('collapsed');
-      btn.textContent = s.classList.contains('collapsed') ? '› Expand' : '‹ Collapse';
-    }
-    // Drawer
-    document.addEventListener('DOMContentLoaded', function() {
-      var drawer  = document.getElementById('cc-drawer');
-      var overlay = document.getElementById('cc-drawer-overlay');
-      function closeDrawer() { drawer.classList.remove('open'); overlay.classList.remove('open'); }
-      document.getElementById('cc-drawer-close').addEventListener('click', closeDrawer);
-      overlay.addEventListener('click', closeDrawer);
-      document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeDrawer(); });
-    });
-  </script>
 </body>
 </html>

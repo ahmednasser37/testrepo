@@ -7,6 +7,8 @@ import csv
 import io
 import json
 import os
+import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -35,6 +37,56 @@ app.config["MAX_CONTENT_LENGTH"] = _UPLOAD_MAX_MB * 1024 * 1024
 _CACHE_DIR         = Path(os.environ.get("SCE_CACHE_DIR", "/tmp/sce_cache"))
 _OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 _OPENROUTER_MODEL  = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free")
+
+# ── Background job store ───────────────────────────────────────────────────────
+# Keyed by job_id (uuid hex). Each entry: {status, pct, step, redirect?, error?}
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _job_update(job_id: str, **kwargs):
+    with _jobs_lock:
+        _jobs[job_id].update(kwargs)
+
+
+def _run_job(job_id: str, baseline_bytes: bytes, updated_bytes: bytes,
+             ck: str, key16: str, dest: str):
+    """Background thread: parse, compare, build dashboard, save to cache."""
+    try:
+        _job_update(job_id, pct=5,  step="Parsing baseline XER…")
+        baseline_tables, bl_warnings = parse_xer_bytes_to_df(baseline_bytes)
+        del baseline_bytes
+
+        _job_update(job_id, pct=20, step="Parsing updated XER…")
+        updated_tables, up_warnings = parse_xer_bytes_to_df(updated_bytes)
+        del updated_bytes
+
+        for name, tables, label in [
+            ("PROJECT", baseline_tables, "Baseline"),
+            ("TASK",    baseline_tables, "Baseline"),
+            ("PROJECT", updated_tables,  "Updated"),
+            ("TASK",    updated_tables,  "Updated"),
+        ]:
+            if name not in tables or tables[name].empty:
+                _job_update(job_id, status="error",
+                            error=f"{label} file is missing the {name} table.")
+                return
+
+        _job_update(job_id, pct=35, step="Comparing schedules…")
+        _job_update(job_id, pct=50, step="Computing EVM & KPIs…")
+        _job_update(job_id, pct=65, step="Detecting out-of-sequence activities…")
+        _job_update(job_id, pct=75, step="Computing longest path…")
+
+        full_data = _build_full_data(ck, baseline_tables, updated_tables)
+
+        _job_update(job_id, pct=92, step="Saving dashboard…")
+        _save_full(key16, full_data)
+
+        _job_update(job_id, status="done", pct=100,
+                    step="Done! Redirecting…", redirect=dest)
+
+    except Exception as exc:
+        _job_update(job_id, status="error", error=str(exc))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -290,12 +342,8 @@ def index():
 
 @app.route("/compare", methods=["POST"])
 def compare():
-    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
-
     def _err(msg, status=400):
-        if is_ajax:
-            return jsonify({"error": msg}), status
-        return render_template("index.html", error=msg)
+        return jsonify({"error": msg}), status
 
     baseline_file = request.files.get("baseline")
     updated_file  = request.files.get("updated")
@@ -317,51 +365,40 @@ def compare():
     if not updated_bytes:
         return _err("Updated file is empty.")
 
-    # Compute cache key before parsing (we free the raw bytes after to save RAM)
     try:
         ck    = cache_key(baseline_bytes, updated_bytes)
         key16 = ck[:16]
     except Exception as exc:
         return _err(f"Failed to hash XER files: {exc}")
 
-    try:
-        baseline_tables, bl_warnings = parse_xer_bytes_to_df(baseline_bytes)
-        updated_tables,  up_warnings = parse_xer_bytes_to_df(updated_bytes)
-        # Free raw bytes immediately — they can be 40-80 MB each
-        del baseline_bytes, updated_bytes
+    dest = url_for("dashboard", key=key16)
 
-        for w in bl_warnings:
-            app.logger.warning("[Baseline XER] %s", w)
-        for w in up_warnings:
-            app.logger.warning("[Updated XER] %s", w)
+    # If already cached, return immediately
+    if _full_path(key16).exists():
+        return jsonify({"redirect": dest})
 
-        for name, tables, label in [
-            ("PROJECT", baseline_tables, "Baseline"),
-            ("TASK",    baseline_tables, "Baseline"),
-            ("PROJECT", updated_tables,  "Updated"),
-            ("TASK",    updated_tables,  "Updated"),
-        ]:
-            if name not in tables or tables[name].empty:
-                return _err(f"{label} file is missing the {name} table.")
-    except Exception as exc:
-        return _err(f"Failed to parse XER files: {exc}")
+    # Start background job
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "processing", "pct": 0, "step": "Starting…"}
 
-    try:
-        # Return cached dashboard if it exists
-        dest = url_for("dashboard", key=key16)
-        if _full_path(key16).exists():
-            if is_ajax:
-                return jsonify({"redirect": dest})
-            return redirect(dest)
+    t = threading.Thread(
+        target=_run_job,
+        args=(job_id, baseline_bytes, updated_bytes, ck, key16, dest),
+        daemon=True,
+    )
+    t.start()
 
-        full_data = _build_full_data(ck, baseline_tables, updated_tables)
-        _save_full(key16, full_data)
-        if is_ajax:
-            return jsonify({"redirect": dest})
-        return redirect(dest)
+    return jsonify({"job_id": job_id})
 
-    except Exception as exc:
-        return _err(f"Comparison failed: {exc}")
+
+@app.route("/status/<job_id>")
+def job_status(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(job)
 
 
 @app.route("/r/<key>")

@@ -366,50 +366,71 @@
 
       xhr.upload.addEventListener('load', function () {
         setUpload(100);
-        stepLabel.textContent = 'Upload complete — parsing files…';
-        setParse(STEPS[0].pct, STEPS[0].label);
-        startParseAnimation();
+        stepLabel.textContent = 'Upload complete — server is processing…';
+        setParse(2, 'Waiting for server…');
       });
 
+      var pollTimer = null;
+
+      function startPolling(jobId) {
+        pollTimer = setInterval(function () {
+          fetch('/status/' + jobId)
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+              if (res.error) {
+                clearInterval(pollTimer);
+                showError(res.error);
+                return;
+              }
+              // Update parse bar with real server progress
+              setParse(res.pct || 0, res.step || '');
+              if (res.status === 'done') {
+                clearInterval(pollTimer);
+                stopParseAnimation(true);
+                setTimeout(function () { window.location.href = res.redirect; }, 400);
+              } else if (res.status === 'error') {
+                clearInterval(pollTimer);
+                showError(res.error || 'Processing failed.');
+              }
+            })
+            .catch(function () { /* network blip — keep polling */ });
+        }, 1500);
+      }
+
       xhr.addEventListener('load', function () {
-        stopParseAnimation(false);
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            var res = JSON.parse(xhr.responseText);
-            if (res.error) { showError(res.error); return; }
-            if (res.redirect) {
-              stopParseAnimation(true);
-              setTimeout(function () { window.location.href = res.redirect; }, 400);
-              return;
-            }
-          } catch (_) {}
-          // Non-JSON success response (shouldn't happen)
-          window.location.href = '/';
-        } else if (xhr.status === 413) {
+        if (xhr.status === 413) {
           showError('Files are too large. Maximum 200 MB per file.');
-        } else {
-          try {
-            var res = JSON.parse(xhr.responseText);
-            showError(res.error || 'Server error ' + xhr.status);
-          } catch (_) {
-            showError('Server error ' + xhr.status + '. Please try again.');
-          }
+          return;
         }
+        try {
+          var res = JSON.parse(xhr.responseText);
+          if (res.error) { showError(res.error); return; }
+          if (res.redirect) {
+            // Cached result — go straight there
+            stopParseAnimation(true);
+            setTimeout(function () { window.location.href = res.redirect; }, 400);
+            return;
+          }
+          if (res.job_id) {
+            // Background job started — poll for progress
+            startPolling(res.job_id);
+            return;
+          }
+        } catch (_) {}
+        showError('Unexpected server response. Please try again.');
       });
 
       xhr.addEventListener('error', function () {
-        stopParseAnimation(false);
         showError('Network error — please check your connection and try again.');
       });
 
       xhr.addEventListener('timeout', function () {
-        stopParseAnimation(false);
-        showError('Request timed out — the file may be too large to process.');
+        showError('Upload timed out — please try again.');
       });
 
       xhr.open('POST', '/compare');
       xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-      xhr.timeout = 300000; // 5 minutes
+      xhr.timeout = 600000; // 10 minutes for large file upload
       xhr.send(fd);
     });
   </script>

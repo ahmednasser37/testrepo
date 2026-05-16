@@ -1150,3 +1150,94 @@ input[type="file"] { display: none; }
   font-size: .6875rem; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase; color: var(--muted);
 }
+
+/* ── Animations ─────────────────────────────────────────────────────────── */
+
+/* Tab panel entrance */
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+.tab-panel.active { animation: panelIn 220ms ease-out both; }
+
+/* Card stagger — apply .anim-card-N class in JS */
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+.anim-card { animation: cardIn 260ms ease-out both; }
+.anim-card-1  { animation-delay:   0ms; }
+.anim-card-2  { animation-delay:  60ms; }
+.anim-card-3  { animation-delay: 120ms; }
+.anim-card-4  { animation-delay: 180ms; }
+.anim-card-5  { animation-delay: 240ms; }
+.anim-card-6  { animation-delay: 300ms; }
+.anim-card-7  { animation-delay: 360ms; }
+.anim-card-8  { animation-delay: 420ms; }
+.anim-card-9  { animation-delay: 480ms; }
+.anim-card-10 { animation-delay: 540ms; }
+
+/* Table row stagger */
+@keyframes rowIn {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+.tbl tbody tr, .data-table tbody tr {
+  animation: rowIn 180ms ease-out both;
+}
+.tbl tbody tr:nth-child(1),  .data-table tbody tr:nth-child(1)  { animation-delay:  0ms; }
+.tbl tbody tr:nth-child(2),  .data-table tbody tr:nth-child(2)  { animation-delay: 20ms; }
+.tbl tbody tr:nth-child(3),  .data-table tbody tr:nth-child(3)  { animation-delay: 40ms; }
+.tbl tbody tr:nth-child(4),  .data-table tbody tr:nth-child(4)  { animation-delay: 60ms; }
+.tbl tbody tr:nth-child(5),  .data-table tbody tr:nth-child(5)  { animation-delay: 80ms; }
+.tbl tbody tr:nth-child(n+6), .data-table tbody tr:nth-child(n+6) { animation-delay: 100ms; }
+
+/* Health badge pulse for bad states */
+@keyframes badgePulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .55; }
+}
+.health-badge.behind,
+.health-badge.atrisk { animation: badgePulse 2.2s ease-in-out infinite; }
+
+/* Progress bar IntersectionObserver fill */
+.prog-bar-fill-anim {
+  width: 0 !important;
+  transition: width .8s cubic-bezier(.4,0,.2,1);
+}
+.prog-bar-fill-anim.visible { width: var(--target-w) !important; }
+
+/* Skeleton shimmer */
+@keyframes shimmer {
+  from { background-position: -400px 0; }
+  to   { background-position:  400px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 400px 100%;
+  animation: shimmer 1.4s infinite linear;
+  border-radius: 4px;
+  color: transparent !important;
+}
+.skeleton-card {
+  height: 120px; border-radius: var(--radius);
+  background: linear-gradient(90deg, #f3f4f6 25%, #e9eaec 50%, #f3f4f6 75%);
+  background-size: 400px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
+
+/* Hover micro-interactions */
+.cc-chart-card:hover   { transform: translateY(-2px); box-shadow: var(--shadow-hover); transition: transform 150ms ease, box-shadow 150ms ease; }
+.cc-kpi-card:hover     { transform: translateY(-2px); box-shadow: var(--shadow-hover); transition: transform 150ms ease, box-shadow 150ms ease; }
+.btn-primary:hover     { transform: translateY(-1px); }
+.btn-secondary:hover   { transform: translateY(-1px); }
+.btn-report:hover      { transform: translateY(-1px); }
+
+/* ── Respect prefers-reduced-motion ───────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

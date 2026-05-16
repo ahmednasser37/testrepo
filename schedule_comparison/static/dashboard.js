@@ -7,7 +7,7 @@ const rendered = new Set();
 
 /* ── Count-up animation ─────────────────────────────────────────────────────── */
 
-function countUp(el, target, duration, prefix, suffix) {
+function countUp(el, target, duration, prefix, suffix, formatter) {
   if (!el) return;
   duration = duration || 800;
   prefix   = prefix   || '';
@@ -19,10 +19,34 @@ function countUp(el, target, duration, prefix, suffix) {
     const elapsed = Math.min((now - start) / duration, 1);
     const ease = 1 - Math.pow(1 - elapsed, 3); // ease-out-cubic
     const cur = target * ease;
-    el.textContent = prefix + cur.toFixed(decimals) + suffix;
+    el.textContent = prefix + (formatter ? formatter(cur) : cur.toFixed(decimals)) + suffix;
     if (elapsed < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
+}
+
+/* ── IntersectionObserver progress bar fill ──────────────────────────────── */
+function initProgressBars(container) {
+  const els = (container || document).querySelectorAll('.evm-progress-fill, .proc-prog-fill, .prog-bar-fill-anim');
+  if (!els.length) return;
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const el = entry.target;
+      const targetW = el.dataset.targetW || el.style.width || '0%';
+      el.style.setProperty('--target-w', targetW);
+      el.style.width = '0%';
+      requestAnimationFrame(() => {
+        el.style.transition = 'width .9s cubic-bezier(.4,0,.2,1)';
+        el.style.width = targetW;
+      });
+      io.unobserve(el);
+    });
+  }, { threshold: 0.1 });
+  els.forEach(el => {
+    el.dataset.targetW = el.style.width || '0%';
+    io.observe(el);
+  });
 }
 
 /* ── Utility helpers ─────────────────────────────────────────────────────── */
@@ -349,22 +373,22 @@ function renderOverview(el) {
     <div class="cc-kpi-row">
       <div class="cc-kpi-card cc-kpi-card--${kpiMod(finishDelay, 14, 5)}" id="kpi-schedule" tabindex="0" role="button" aria-label="Schedule variance detail">
         <div class="cc-kpi-label">Avg Finish Variance</div>
-        <div class="cc-kpi-value">${finishDelay != null ? (finishDelay > 0 ? '+' : '') + fmt(finishDelay,1) + 'd' : '—'}</div>
+        <div class="cc-kpi-value" id="kpi-val-schedule">${finishDelay != null ? (finishDelay > 0 ? '+' : '') + fmt(finishDelay,1) + 'd' : '—'}</div>
         <div class="cc-kpi-sub">${S.delayed_activities || 0} activities delayed &gt;5d</div>
       </div>
       <div class="cc-kpi-card cc-kpi-card--${(S.added||0)+(S.deleted||0) > 10 ? 'warning':'neutral'}" id="kpi-changes" tabindex="0" role="button" aria-label="Activity changes detail">
         <div class="cc-kpi-label">Activity Changes</div>
-        <div class="cc-kpi-value">${(S.added||0)+(S.deleted||0)+(S.changed||0)}</div>
+        <div class="cc-kpi-value" id="kpi-val-changes">${(S.added||0)+(S.deleted||0)+(S.changed||0)}</div>
         <div class="cc-kpi-sub">+${S.added||0} added · −${S.deleted||0} deleted · ~${S.changed||0} changed</div>
       </div>
       <div class="cc-kpi-card cc-kpi-card--${relChanges > 20 ? 'critical' : relChanges > 5 ? 'warning' : 'neutral'}" id="kpi-logic" tabindex="0" role="button" aria-label="Logic changes detail">
         <div class="cc-kpi-label">Logic Changes</div>
-        <div class="cc-kpi-value">${relChanges}</div>
+        <div class="cc-kpi-value" id="kpi-val-logic">${relChanges}</div>
         <div class="cc-kpi-sub">+${S.relationships_added||0} · −${S.relationships_deleted||0} · ~${S.relationships_changed||0}</div>
       </div>
       <div class="cc-kpi-card cc-kpi-card--${cpi != null && cpi < 0.8 ? 'critical' : cpi != null && cpi < 1 ? 'warning' : 'good'}" id="kpi-ev" tabindex="0" role="button" aria-label="Earned value detail">
         <div class="cc-kpi-label">${ev.has_cost_data ? 'Cost Performance (CPI)' : 'Schedule Perf (SPI)'}</div>
-        <div class="cc-kpi-value">${cpi != null ? fmt(cpi, 2) : spi != null ? fmt(spi, 2) : '—'}</div>
+        <div class="cc-kpi-value" id="kpi-val-ev">${cpi != null ? fmt(cpi, 2) : spi != null ? fmt(spi, 2) : '—'}</div>
         <div class="cc-kpi-sub">${ev.has_cost_data ? (cpi >= 1 ? '✓ Under budget' : '↓ Over budget') : 'No cost data'}</div>
       </div>
     </div>
@@ -373,35 +397,35 @@ function renderOverview(el) {
     <div class="cc-charts-grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">
 
       <!-- 1. S-Curve (WIDE) -->
-      <div class="cc-chart-card cc-chart-card--wide" id="chart-card-scurve" tabindex="0" role="button">
+      <div class="cc-chart-card cc-chart-card--wide anim-card anim-card-1" id="chart-card-scurve" tabindex="0" role="button">
         <div class="cc-chart-title">S-Curve — Planned vs Actual</div>
         <div class="cc-chart-hint">Cumulative % completion: baseline (dotted) vs updated (solid)</div>
         <div id="chart-cc-scurve" style="height:240px"></div>
       </div>
 
       <!-- 2. Activity Status -->
-      <div class="cc-chart-card" id="chart-card-status" tabindex="0" role="button">
+      <div class="cc-chart-card anim-card anim-card-2" id="chart-card-status" tabindex="0" role="button">
         <div class="cc-chart-title">Activity Status</div>
         <div class="cc-chart-hint">Completed · In Progress · Not Started</div>
         <div id="chart-cc-donut"></div>
       </div>
 
       <!-- 3. Longest Path / Bottleneck -->
-      <div class="cc-chart-card" id="chart-card-lp" tabindex="0" role="button">
+      <div class="cc-chart-card anim-card anim-card-3" id="chart-card-lp" tabindex="0" role="button">
         <div class="cc-chart-title">Longest Path</div>
         <div class="cc-chart-hint">Bottleneck activity · driving chain</div>
         <div id="chart-cc-lp"></div>
       </div>
 
       <!-- 4. Procurement Status -->
-      <div class="cc-chart-card" id="chart-card-proc" tabindex="0" role="button">
+      <div class="cc-chart-card anim-card anim-card-4" id="chart-card-proc" tabindex="0" role="button">
         <div class="cc-chart-title">Procurement Status</div>
         <div class="cc-chart-hint">Items by status</div>
         <div id="chart-cc-proc"></div>
       </div>
 
       <!-- 5. CPI Gauge -->
-      <div class="cc-chart-card" id="chart-card-cpi" tabindex="0" role="button">
+      <div class="cc-chart-card anim-card anim-card-5" id="chart-card-cpi" tabindex="0" role="button">
         <div class="cc-chart-title">Cost Performance (CPI)</div>
         <div class="cc-chart-hint">Earned Value ÷ Actual Cost</div>
         <div class="cc-gauge ${gaugeColor(cpi, 1)}">
@@ -411,7 +435,7 @@ function renderOverview(el) {
       </div>
 
       <!-- 6. SPI Gauge -->
-      <div class="cc-chart-card" id="chart-card-spi" tabindex="0" role="button">
+      <div class="cc-chart-card anim-card anim-card-6" id="chart-card-spi" tabindex="0" role="button">
         <div class="cc-chart-title">Schedule Performance (SPI)</div>
         <div class="cc-chart-hint">Earned Duration ÷ Planned Duration</div>
         <div class="cc-gauge ${gaugeColor(spi, 1)}">
@@ -421,7 +445,7 @@ function renderOverview(el) {
       </div>
 
       <!-- 7. Critical Path % -->
-      <div class="cc-chart-card" id="chart-card-cp" tabindex="0" role="button">
+      <div class="cc-chart-card anim-card anim-card-7" id="chart-card-cp" tabindex="0" role="button">
         <div class="cc-chart-title">Critical Path Density</div>
         <div class="cc-chart-hint">% of activities with zero float</div>
         <div class="cc-gauge ${critPct() > 30 ? 'cc-gauge--red' : critPct() > 15 ? 'cc-gauge--orange' : 'cc-gauge--green'}">
@@ -431,21 +455,21 @@ function renderOverview(el) {
       </div>
 
       <!-- 8. OOS Indicator -->
-      <div class="cc-chart-card" id="chart-card-logic" tabindex="0" role="button">
+      <div class="cc-chart-card anim-card anim-card-8" id="chart-card-logic" tabindex="0" role="button">
         <div class="cc-chart-title">Out-of-Sequence</div>
         <div class="cc-chart-hint">Activities started before predecessor finished</div>
         <div id="chart-cc-logic"></div>
       </div>
 
       <!-- 9. Milestone Status -->
-      <div class="cc-chart-card" id="chart-card-ms" tabindex="0" role="button">
+      <div class="cc-chart-card anim-card anim-card-9" id="chart-card-ms" tabindex="0" role="button">
         <div class="cc-chart-title">Milestone Status</div>
         <div class="cc-chart-hint">On Track · At Risk · Late · Complete</div>
         <div id="chart-cc-ms"></div>
       </div>
 
       <!-- 10. WBS Distribution -->
-      <div class="cc-chart-card" id="chart-card-wbs" tabindex="0" role="button">
+      <div class="cc-chart-card anim-card anim-card-10" id="chart-card-wbs" tabindex="0" role="button">
         <div class="cc-chart-title">WBS Work Distribution</div>
         <div class="cc-chart-hint">Top 8 WBS nodes by activity count</div>
         <div id="chart-cc-wbs" style="height:180px"></div>
@@ -479,6 +503,19 @@ function renderOverview(el) {
       </table>
     </div>` : ''}
   `;
+
+  // ── Count-up animations ─────────────────────────────────────────────────
+  if (finishDelay != null) {
+    countUp(el.querySelector('#kpi-val-schedule'), finishDelay, 900, finishDelay > 0 ? '+' : '', 'd');
+  }
+  const totalChanges = (S.added||0)+(S.deleted||0)+(S.changed||0);
+  countUp(el.querySelector('#kpi-val-changes'), totalChanges, 900);
+  countUp(el.querySelector('#kpi-val-logic'), relChanges, 900);
+  const evVal = cpi != null ? cpi : spi;
+  if (evVal != null) countUp(el.querySelector('#kpi-val-ev'), evVal, 900);
+
+  // ── Progress bar IntersectionObserver ───────────────────────────────────
+  initProgressBars(el);
 
   // ── Wire KPI card click → drawer ────────────────────────────────────────
   document.getElementById('kpi-schedule').addEventListener('click', () => {
@@ -1362,31 +1399,31 @@ function renderEV(el) {
         <div class="evm-kpi-card evm-kpi-card--blue">
           <div class="evm-kpi-label">BUDGET AT COMPLETION</div>
           <div class="evm-kpi-abbr">BAC</div>
-          <div class="evm-kpi-value">${hasCost ? fmtCost(bac) : '—'}</div>
+          <div class="evm-kpi-value" id="evm-val-bac">${hasCost ? fmtCost(bac) : '—'}</div>
           <div class="evm-kpi-sub">Total project budget</div>
         </div>
         <div class="evm-kpi-card evm-kpi-card--gold">
           <div class="evm-kpi-label">PLANNED VALUE</div>
           <div class="evm-kpi-abbr">PV</div>
-          <div class="evm-kpi-value">${hasCost ? fmtCost(pv) : '—'}</div>
+          <div class="evm-kpi-value" id="evm-val-pv">${hasCost ? fmtCost(pv) : '—'}</div>
           <div class="evm-kpi-sub">${schedPct != null ? fmtPct(schedPct) + ' of budget planned' : 'No cost data'}</div>
         </div>
         <div class="evm-kpi-card evm-kpi-card--green">
           <div class="evm-kpi-label">EARNED VALUE</div>
           <div class="evm-kpi-abbr">EV</div>
-          <div class="evm-kpi-value">${hasCost ? fmtCost(ev_v) : '—'}</div>
+          <div class="evm-kpi-value" id="evm-val-ev">${hasCost ? fmtCost(ev_v) : '—'}</div>
           <div class="evm-kpi-sub">${perfPct != null ? fmtPct(perfPct) + ' physically complete' : 'No cost data'}</div>
         </div>
         <div class="evm-kpi-card evm-kpi-card--teal">
           <div class="evm-kpi-label">SCHEDULE % COMPLETE</div>
           <div class="evm-kpi-abbr">SCHED</div>
-          <div class="evm-kpi-value">${schedPct != null ? fmtPct(schedPct) : fmtPct(K.pct_complete_weighted)}</div>
+          <div class="evm-kpi-value" id="evm-val-sched">${schedPct != null ? fmtPct(schedPct) : fmtPct(K.pct_complete_weighted)}</div>
           <div class="evm-kpi-sub">${schedPct != null ? fmtPct(schedPct) + ' planned' : 'Duration-based'}</div>
         </div>
         <div class="evm-kpi-card evm-kpi-card--purple">
           <div class="evm-kpi-label">PERFORMANCE % COMPLETE</div>
           <div class="evm-kpi-abbr">PERF</div>
-          <div class="evm-kpi-value">${perfPct != null ? fmtPct(perfPct) : fmtPct(K.pct_complete_weighted)}</div>
+          <div class="evm-kpi-value" id="evm-val-perf">${perfPct != null ? fmtPct(perfPct) : fmtPct(K.pct_complete_weighted)}</div>
           <div class="evm-kpi-sub">Work performed percentage</div>
         </div>
       </div>
@@ -1491,6 +1528,21 @@ function renderEV(el) {
       </div>` : ''}
     </div>
   `;
+
+  // ── Count-up EVM values ─────────────────────────────────────────────────
+  const fmtN = v => Math.round(Math.max(0, v)).toLocaleString();
+  if (hasCost) {
+    countUp(el.querySelector('#evm-val-bac'), bac, 1200, '$', '', fmtN);
+    countUp(el.querySelector('#evm-val-pv'),  pv,  1200, '$', '', fmtN);
+    countUp(el.querySelector('#evm-val-ev'),  ev_v, 1200, '$', '', fmtN);
+  }
+  const schedVal = schedPct != null ? schedPct : K.pct_complete_weighted;
+  const perfVal  = perfPct  != null ? perfPct  : K.pct_complete_weighted;
+  if (schedVal != null) countUp(el.querySelector('#evm-val-sched'), schedVal, 1000, '', '%');
+  if (perfVal  != null) countUp(el.querySelector('#evm-val-perf'),  perfVal,  1000, '', '%');
+
+  // ── Progress bar IntersectionObserver ───────────────────────────────────
+  initProgressBars(el);
 
   // Monthly variance table
   const scurveU = (D.scurve && D.scurve.updated) || [];

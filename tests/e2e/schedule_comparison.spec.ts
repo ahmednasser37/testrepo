@@ -101,8 +101,12 @@ test.describe('Comparison dashboard', () => {
     await page.locator('button[type="submit"], input[type="submit"]').click();
     await page.waitForLoadState('networkidle', { timeout: 30000 });
 
-    // Table or task codes should appear
-    const rows = page.locator('table tr, [data-testid="activity-row"]');
+    // Navigate to the Drilldown tab where the activity table is rendered
+    await page.locator('[data-tab="drilldown"]').click();
+    await page.waitForTimeout(500);
+
+    // Table rows should appear in the drilldown matrix
+    const rows = page.locator('table tr, .dd-row');
     const count = await rows.count();
     expect(count).toBeGreaterThan(0);
   });

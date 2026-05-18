@@ -1152,10 +1152,10 @@ function renderLookahead(el) {
   const counts = LA.counts || {};
 
   const windows = [
-    { key: 'overdue',   label: 'Overdue',  items: LA.overdue   || [] },
-    { key: 'two_week',  label: '2-Week',   items: LA.two_week  || [] },
-    { key: 'four_week', label: '4-Week',   items: LA.four_week || [] },
-    { key: 'six_week',  label: '6-Week',   items: LA.six_week  || [] },
+    { key: 'overdue',    label: 'Overdue',  items: LA.overdue    || [] },
+    { key: 'two_week',   label: '2-Week',   items: LA.two_week   || [] },
+    { key: 'three_week', label: '3-Week',   items: LA.three_week || [] },
+    { key: 'six_week',   label: '6-Week',   items: LA.six_week   || [] },
   ];
 
   const defaultWindow = (LA.overdue && LA.overdue.length > 0) ? 'overdue' : 'two_week';

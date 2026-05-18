@@ -1,47 +1,73 @@
 /* ============================================================
-   P6 Compare — EVM Dashboard  Dark Mode Design System
+   P6 Compare — B2B Analytics Dashboard (Construction/Infrastructure)
+   Light mode · Blueprint blue · Safety orange accents
    ============================================================ */
 
 /* ── 1. Design Tokens ────────────────────────────────────────── */
 :root {
-  /* Spec-mandated dark canvas */
-  --bg:           #111625;
-  --surface:      #1a2035;
-  --surface-2:    #212940;
-  --surface-3:    #2a3350;
-  --border:       rgba(255,255,255,0.07);
-  --border-2:     rgba(255,255,255,0.13);
+  /* Canvas */
+  --bg:           #f8fafc;
+  --surface:      #ffffff;
+  --surface-2:    #f1f5f9;
+  --surface-3:    #e2e8f0;
+  --border:       #e2e8f0;
+  --border-2:     #cbd5e1;
 
   /* Typography */
-  --text:         #e2e8f0;
-  --text-muted:   #8892a4;
-  --text-subtle:  #5a6478;
+  --text:         #0f172a;
+  --text-muted:   #64748b;
+  --text-subtle:  #94a3b8;
 
-  /* Color intent model */
-  --teal:         #00bcd4;
-  --teal-dim:     rgba(0,188,212,0.15);
-  --blue:         #1e88e5;
-  --blue-dim:     rgba(30,136,229,0.15);
-  --red:          #e15554;
-  --red-dim:      rgba(225,85,84,0.15);
-  --green:        #43a047;
-  --green-dim:    rgba(67,160,71,0.15);
-  --amber:        #fb8c00;
-  --amber-dim:    rgba(251,140,0,0.15);
-  --purple:       #8e24aa;
-  --purple-dim:   rgba(142,36,170,0.15);
+  /* Sidebar — deep navy */
+  --sidebar-bg:            #0f172a;
+  --sidebar-hover:         rgba(255,255,255,.06);
+  --sidebar-active-bg:     rgba(14,165,233,.18);
+  --sidebar-active-border: #0ea5e9;
+  --sidebar-text:          #94a3b8;
+  --sidebar-active-text:   #e0f2fe;
+  --sidebar-section-text:  #475569;
+
+  /* Brand colors */
+  --blue:         #0369a1;
+  --blue-light:   #0ea5e9;
+  --blue-bg:      #f0f9ff;
+  --blue-border:  #bae6fd;
+  --orange:       #ea580c;
+  --orange-bg:    #fff7ed;
+  --orange-border:#fed7aa;
+  --green:        #16a34a;
+  --green-bg:     #f0fdf4;
+  --green-dim:    rgba(22,163,74,.12);
+  --amber:        #d97706;
+  --amber-bg:     #fffbeb;
+  --amber-dim:    rgba(217,119,6,.12);
+  --red:          #dc2626;
+  --red-bg:       #fef2f2;
+  --red-dim:      rgba(220,38,38,.12);
+  --teal:         #0891b2;
+  --teal-dim:     rgba(8,145,178,.12);
+  --purple:       #7c3aed;
+  --purple-dim:   rgba(124,58,237,.12);
+
+  /* Aliases used by component code */
+  --blue-dim:     rgba(3,105,161,.12);
 
   /* Layout */
   --sidebar-w:           240px;
-  --sidebar-collapsed-w: 52px;
-  --topbar-h:            52px;
-  --radius:              8px;
-  --radius-lg:           12px;
-  --shadow:              0 2px 8px rgba(0,0,0,0.4);
-  --shadow-lg:           0 8px 32px rgba(0,0,0,0.5);
+  --sidebar-collapsed-w: 56px;
+  --topbar-h:            54px;
+  --radius:              10px;
+  --radius-lg:           14px;
+  --shadow:              0 1px 3px rgba(15,23,42,.07), 0 1px 2px rgba(15,23,42,.05);
+  --shadow-lg:           0 4px 16px rgba(15,23,42,.10), 0 2px 4px rgba(15,23,42,.06);
+  --shadow-hover:        0 8px 24px rgba(15,23,42,.12);
 
-  /* Font */
-  --font: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  /* Typography */
+  --font:      'Fira Sans', 'Inter', -apple-system, system-ui, sans-serif;
+  --font-mono: 'Fira Code', 'Fira Mono', ui-monospace, monospace;
+
+  /* Data density */
+  --table-row-h: 36px;
 }
 
 /* ── 2. Reset + base ─────────────────────────────────────────── */
@@ -74,13 +100,13 @@ a:hover { color: var(--text); }
 .sidebar {
   width: var(--sidebar-w);
   flex-shrink: 0;
-  background: var(--surface);
+  background: var(--sidebar-bg);
   display: flex;
   flex-direction: column;
   transition: width 220ms cubic-bezier(.4,0,.2,1);
   z-index: 10;
   overflow: hidden;
-  border-right: 1px solid var(--border-2);
+  border-right: 1px solid rgba(255,255,255,.06);
   position: relative;
 }
 
@@ -100,7 +126,7 @@ a:hover { color: var(--text); }
   gap: .75rem;
   padding: 0 1rem;
   height: var(--topbar-h);
-  border-bottom: 1px solid var(--border-2);
+  border-bottom: 1px solid rgba(255,255,255,.07);
   flex-shrink: 0;
 }
 .brand-icon {
@@ -110,7 +136,7 @@ a:hover { color: var(--text); }
 .brand-name {
   font-size: .9375rem;
   font-weight: 700;
-  color: var(--text);
+  color: #f1f5f9;
   letter-spacing: -.02em;
   white-space: nowrap;
 }
@@ -125,7 +151,17 @@ a:hover { color: var(--text); }
 
 .sidebar-nav::-webkit-scrollbar { width: 3px; }
 .sidebar-nav::-webkit-scrollbar-track { background: transparent; }
-.sidebar-nav::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
+.sidebar-nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 2px; }
+
+/* Section labels */
+.sidebar-section-label {
+  font-size: .625rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  color: var(--sidebar-section-text);
+  text-transform: uppercase;
+  padding: .625rem .75rem .25rem;
+}
 
 .nav-item {
   display: flex;
@@ -133,7 +169,7 @@ a:hover { color: var(--text); }
   gap: .625rem;
   padding: .5rem .625rem;
   border-radius: var(--radius);
-  color: var(--text-muted);
+  color: var(--sidebar-text);
   cursor: pointer;
   font-size: .875rem;
   font-weight: 500;
@@ -147,12 +183,12 @@ a:hover { color: var(--text); }
   margin-bottom: 2px;
 }
 .nav-item:hover {
-  background: var(--surface-2);
-  color: var(--text);
+  background: var(--sidebar-hover);
+  color: #e2e8f0;
 }
 .nav-item.active {
-  background: var(--teal-dim);
-  color: var(--teal);
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-text);
   font-weight: 600;
 }
 .nav-item.active::before {
@@ -161,7 +197,7 @@ a:hover { color: var(--text); }
   left: 0; top: 50%;
   transform: translateY(-50%);
   width: 3px; height: 18px;
-  background: var(--teal);
+  background: var(--sidebar-active-border);
   border-radius: 0 2px 2px 0;
 }
 .nav-icon {
@@ -176,7 +212,7 @@ a:hover { color: var(--text); }
   flex: 1;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--border-2);
+  border-top: 1px solid rgba(255,255,255,.07);
   min-height: 0;
   overflow: hidden;
 }
@@ -295,8 +331,8 @@ a:hover { color: var(--text); }
   padding: .5rem;
   background: none;
   border: none;
-  border-top: 1px solid var(--border-2);
-  color: var(--text-subtle);
+  border-top: 1px solid rgba(255,255,255,.07);
+  color: #64748b;
   cursor: pointer;
   font-size: 1rem;
   font-family: var(--font);
@@ -305,8 +341,8 @@ a:hover { color: var(--text); }
   z-index: 2;
 }
 .collapse-btn:hover {
-  background: var(--surface-2);
-  color: var(--text);
+  background: rgba(255,255,255,.06);
+  color: #94a3b8;
 }
 
 /* ── 9. Main Area ────────────────────────────────────────────── */
@@ -343,7 +379,8 @@ a:hover { color: var(--text); }
   flex-shrink: 0;
 }
 
-.page-heading {
+.page-heading,
+.page-title {
   font-size: .9375rem;
   font-weight: 700;
   color: var(--text);
@@ -499,6 +536,20 @@ a:hover { color: var(--text); }
   left: 0; top: 20%; bottom: 20%;
   width: 1px;
   background: var(--border-2);
+}
+
+.kpi-item--clickable {
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: background 150ms ease, transform 150ms ease;
+}
+.kpi-item--clickable:hover {
+  background: var(--surface-2);
+  transform: translateY(-1px);
+}
+.kpi-item--clickable:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
 }
 
 .kpi-item-val {
@@ -780,6 +831,12 @@ a:hover { color: var(--text); }
 .health-badge.health-critical { background: var(--red-dim);   color: var(--red);   border: 1px solid rgba(225,85,84,0.3); }
 .health-unknown,
 .health-badge.health-unknown  { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border-2); }
+
+/* JS-set variants */
+.health-badge.behind   { background: var(--red-dim);   color: var(--red);   border: 1px solid rgba(220,38,38,.25); }
+.health-badge.ahead    { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(22,163,74,.25); }
+.health-badge.ontrack  { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(22,163,74,.25); }
+.health-badge.unknown  { background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border-2); }
 
 .badge {
   display: inline-flex; align-items: center;
@@ -1100,7 +1157,7 @@ a:hover { color: var(--text); }
 }
 .sc-stat-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 12px 36px rgba(0,0,0,0.55);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
 }
 .sc-stat-card:focus-visible {
   outline: 2px solid var(--sc-border-color, var(--teal));
@@ -1269,3 +1326,53 @@ input[type="file"] { display: none; }
 .ov-s-dot       { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .ov-s-num       { font-weight: 700; font-size: 1rem; min-width: 2ch; }
 .ov-s-lbl       { color: var(--text-muted); }
+
+/* ── Topbar crumb variants ───────────────────────────────────── */
+.crumb-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .1875rem .5rem;
+  font-size: .75rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.crumb-arrow { color: var(--text-subtle); font-size: .75rem; }
+.warn-chip {
+  font-size: .6875rem; font-weight: 600; padding: .125rem .5rem;
+  background: var(--amber-bg); color: var(--amber);
+  border: 1px solid var(--orange-border); border-radius: 4px;
+}
+
+/* ── Clickable drill-down cards ──────────────────────────────── */
+/* Any card with role="button" gets pointer cursor + hover lift */
+[role="button"], .clickable {
+  cursor: pointer;
+}
+.sc-stat-card[role="button"]:hover,
+.sc-stat-card[tabindex]:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hover);
+}
+
+/* Numbers: Fira Code everywhere */
+.kpi-item-val, .sc-card-value, .stat-num, .evm-kpi-value,
+.cc-kpi-value, .cc-gauge-value, .ov-s-num {
+  font-family: var(--font-mono);
+}
+
+/* Topbar btn styles */
+.btn-report {
+  display: inline-flex; align-items: center; gap: .375rem;
+  padding: .375rem .875rem;
+  background: var(--blue); color: #fff;
+  border: none; border-radius: var(--radius);
+  font-size: .8125rem; font-weight: 600;
+  cursor: pointer; font-family: var(--font);
+  transition: opacity 150ms ease;
+}
+.btn-report:hover { opacity: .88; }

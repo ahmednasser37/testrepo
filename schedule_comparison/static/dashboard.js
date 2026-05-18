@@ -595,23 +595,23 @@ function renderOverview(el) {
   el.innerHTML = `
     <!-- KPI ribbon -->
     <div class="ov-kpi-ribbon">
-      <div class="kpi-item">
+      <div class="kpi-item kpi-item--clickable" id="ov-kpi-spi" tabindex="0" role="button" title="Click for SPI breakdown">
         <div class="kpi-item-val ${spiKpiCl}">${spiDisp}</div>
         <div class="kpi-item-lbl">SPI</div>
       </div>
-      <div class="kpi-item">
+      <div class="kpi-item kpi-item--clickable" id="ov-kpi-cpi" tabindex="0" role="button" title="Click for CPI breakdown">
         <div class="kpi-item-val ${cpiKpiCl}">${cpiDisp}</div>
         <div class="kpi-item-lbl">CPI</div>
       </div>
-      <div class="kpi-item">
+      <div class="kpi-item kpi-item--clickable" id="ov-kpi-float" tabindex="0" role="button" title="Click for float details">
         <div class="kpi-item-val ${floatKpiCl}">${floatDisp}</div>
         <div class="kpi-item-lbl">Float Consumed</div>
       </div>
-      <div class="kpi-item">
+      <div class="kpi-item kpi-item--clickable" id="ov-kpi-delay" tabindex="0" role="button" title="Click for delay details">
         <div class="kpi-item-val ${delayKpiCl}">${delayDisp}</div>
         <div class="kpi-item-lbl">Schedule Delay</div>
       </div>
-      <div class="kpi-item">
+      <div class="kpi-item kpi-item--clickable" id="ov-kpi-pct" tabindex="0" role="button" title="Click for completion breakdown">
         <div class="kpi-item-val ${pctKpiCl}">${pctDisp}</div>
         <div class="kpi-item-lbl">% Complete</div>
       </div>
@@ -863,6 +863,55 @@ function renderOverview(el) {
       ['Code','Name','WBS','Finish Var.'],
       crit.slice(0,50).map(a => [a.task_code, a.task_name, a.wbs_name, fmt(a.finish_variance_days,1)+'d'])
     ));
+  });
+
+  // ── KPI ribbon clicks ────────────────────────────────────────────────────
+  el.querySelector('#ov-kpi-spi').addEventListener('click', () => {
+    const K = D.kpis || {};
+    const rows = [
+      ['SPI (Duration)', K.spi_duration != null ? fmt(K.spi_duration,3) : '—'],
+      ['SPI (Cost)',     K.spi_cost     != null ? fmt(K.spi_cost,3)     : '—'],
+      ['Earned Value',  K.earned_value  != null ? '$'+K.earned_value.toLocaleString() : '—'],
+      ['Planned Value', K.planned_value != null ? '$'+K.planned_value.toLocaleString() : '—'],
+      ['Schedule Status', K.schedule_status || '—'],
+    ];
+    openDrawer('Schedule Performance Index (SPI)',
+      `<p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1rem">SPI &lt; 1.0 means behind schedule. SPI &gt; 1.0 means ahead of schedule.</p>` +
+      drawerTable(['Metric','Value'], rows));
+  });
+  el.querySelector('#ov-kpi-cpi').addEventListener('click', () => {
+    const K = D.kpis || {};
+    const rows = [
+      ['CPI', K.cpi != null ? fmt(K.cpi,3) : '—'],
+      ['Actual Cost',  K.actual_cost   != null ? '$'+K.actual_cost.toLocaleString()   : '—'],
+      ['Earned Value', K.earned_value  != null ? '$'+K.earned_value.toLocaleString()  : '—'],
+      ['Budget at Completion', K.bac   != null ? '$'+K.bac.toLocaleString()           : '—'],
+      ['EAC (Estimate at Completion)', K.eac != null ? '$'+K.eac.toLocaleString()     : '—'],
+    ];
+    openDrawer('Cost Performance Index (CPI)',
+      `<p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1rem">CPI &lt; 1.0 means over budget. CPI &gt; 1.0 means under budget.</p>` +
+      drawerTable(['Metric','Value'], rows));
+  });
+  el.querySelector('#ov-kpi-float').addEventListener('click', () => {
+    const lowFloat = variances.filter(a => a.new_free_float_hours != null && a.new_free_float_hours < 40 && !a.is_critical)
+      .sort((a,b) => (a.new_free_float_hours||0) - (b.new_free_float_hours||0)).slice(0,30);
+    openDrawer('Low Float Activities (< 40h)',
+      `<p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1rem">Activities approaching critical path — monitor closely.</p>` +
+      drawerTable(['Code','Name','Free Float','Total Float'],
+        lowFloat.map(a => [a.task_code, a.task_name, fmt(a.new_free_float_hours,1)+'h', fmt(a.new_total_float_hours,1)+'h'])));
+  });
+  el.querySelector('#ov-kpi-delay').addEventListener('click', () => {
+    openDrawer('Top Delayed Activities', drawerTable(
+      ['Code','Name','WBS','Finish Var.','Status'],
+      top10delayed.map(a => [a.task_code, a.task_name, a.wbs_name, fmt(a.finish_variance_days,1)+'d', a.new_status||a.old_status])
+    ));
+  });
+  el.querySelector('#ov-kpi-pct').addEventListener('click', () => {
+    const inProg = variances.filter(a => (a.new_pct_complete||a.old_pct_complete||0) > 0 && (a.new_pct_complete||a.old_pct_complete||0) < 100)
+      .sort((a,b) => (b.pct_complete_change||0) - (a.pct_complete_change||0)).slice(0,30);
+    openDrawer('In-Progress Activity Completion',
+      drawerTable(['Code','Name','% Complete','Change'],
+        inProg.map(a => [a.task_code, a.task_name, fmt(a.new_pct_complete||a.old_pct_complete,1)+'%', a.pct_complete_change != null ? (a.pct_complete_change>0?'+':'')+fmt(a.pct_complete_change,1)+'%' : '—'])));
   });
 }
 

@@ -29,6 +29,7 @@ class ParseResult:
     tables: Dict[str, List[Dict[str, str]]]
     header: Optional[str]           # Raw ERMHDR line, if present
     warnings: List[str]
+    table_fields: Dict[str, List[str]] = field(default_factory=dict)  # %F columns per table
 
 
 # ── Encoding detection ────────────────────────────────────────────────────────
@@ -68,11 +69,14 @@ def _decode_bytes(raw: bytes) -> tuple[str, list[str]]:
 def parse_xer_bytes(raw: bytes) -> ParseResult:
     """Parse raw XER bytes into a ParseResult (list-of-dicts tables)."""
     text, warnings = _decode_bytes(raw)
-    return _parse_text(text, warnings)
+    result = _parse_text(text, warnings)
+    del text  # free the decoded string — can be 40 MB+ for large XER files
+    return result
 
 
 def _parse_text(text: str, warnings: List[str]) -> ParseResult:
     tables: Dict[str, List[Dict[str, str]]] = {}
+    table_fields: Dict[str, List[str]] = {}
     header: Optional[str] = None
     current_table: Optional[str] = None
     current_fields: List[str] = []
@@ -106,6 +110,7 @@ def _parse_text(text: str, warnings: List[str]) -> ParseResult:
                 warnings.append(f"Line {line_no}: %F without preceding %T — ignored.")
                 continue
             current_fields = parts[1:]
+            table_fields[current_table] = current_fields
 
         elif marker == "%R":
             if current_table is None:
@@ -132,7 +137,7 @@ def _parse_text(text: str, warnings: List[str]) -> ParseResult:
             else:
                 warnings.append(f"Line {line_no}: Unknown marker '{marker}' ignored.")
 
-    return ParseResult(tables=tables, header=header, warnings=warnings)
+    return ParseResult(tables=tables, header=header, warnings=warnings, table_fields=table_fields)
 
 
 # ── DataFrame adapter ─────────────────────────────────────────────────────────
@@ -179,7 +184,8 @@ def to_dataframes(result: ParseResult) -> dict[str, pd.DataFrame]:
 
     for table_name, rows in result.tables.items():
         if not rows:
-            dfs[table_name] = pd.DataFrame()
+            cols = result.table_fields.get(table_name, [])
+            dfs[table_name] = pd.DataFrame(columns=cols)
             continue
 
         df = pd.DataFrame(rows)
@@ -227,14 +233,25 @@ def parse_xer_bytes_to_df(raw: bytes) -> tuple[dict[str, pd.DataFrame], list[str
 
 
 def extract_data_date(tables: dict[str, pd.DataFrame]) -> pd.Timestamp | None:
-    """Return the data_date from the PROJECT table, or None if unavailable."""
+    """Return the data date from the PROJECT table.
+
+    P6 XER files store it as ``last_recalc_date``; test/synthetic XERs may use
+    a ``data_date`` column.  We check both, preferring ``last_recalc_date``.
+    """
     project = tables.get("PROJECT", pd.DataFrame())
-    if project.empty or "data_date" not in project.columns:
+    if project.empty:
         return None
-    val = project.iloc[0].get("data_date")
-    if pd.isna(val):
-        return None
-    return pd.Timestamp(val) if not isinstance(val, pd.Timestamp) else val
+    row = project.iloc[0]
+    for col in ("last_recalc_date", "data_date"):
+        val = row.get(col)
+        if val is not None and not (isinstance(val, float) and pd.isna(val)):
+            try:
+                ts = pd.Timestamp(val)
+                if not pd.isna(ts):
+                    return ts
+            except Exception:
+                pass
+    return None
 
 
 def extract_project_meta(tables: dict[str, pd.DataFrame]) -> dict:

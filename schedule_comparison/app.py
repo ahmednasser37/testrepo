@@ -7,10 +7,14 @@ import csv
 import io
 import json
 import os
+import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, request, render_template, Response, redirect, url_for, stream_with_context
+import pandas as pd
+
+from flask import Flask, request, render_template, Response, redirect, url_for, stream_with_context, jsonify
 
 from xer_parser import parse_xer_bytes_to_df, extract_data_date
 from comparison_engine import compare_schedules
@@ -21,16 +25,68 @@ from lookahead_engine import compute_lookahead
 from kpi_engine import compute_kpis
 from milestone_engine import compare_milestones
 from procurement_engine import compute_procurement
+from oos_engine import detect_oos
+from path_engine import compute_longest_path
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SCE_SECRET_KEY", "dev-secret-change-in-production")
 
-_UPLOAD_MAX_MB = int(os.environ.get("SCE_UPLOAD_MAX_MB", 50))
+_UPLOAD_MAX_MB = int(os.environ.get("SCE_UPLOAD_MAX_MB", 200))
 app.config["MAX_CONTENT_LENGTH"] = _UPLOAD_MAX_MB * 1024 * 1024
 
 _CACHE_DIR         = Path(os.environ.get("SCE_CACHE_DIR", "/tmp/sce_cache"))
 _OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 _OPENROUTER_MODEL  = os.environ.get("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3-0324:free")
+
+# ── Background job store ───────────────────────────────────────────────────────
+# Keyed by job_id (uuid hex). Each entry: {status, pct, step, redirect?, error?}
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _job_update(job_id: str, **kwargs):
+    with _jobs_lock:
+        _jobs[job_id].update(kwargs)
+
+
+def _run_job(job_id: str, baseline_bytes: bytes, updated_bytes: bytes,
+             ck: str, key16: str, dest: str):
+    """Background thread: parse, compare, build dashboard, save to cache."""
+    try:
+        _job_update(job_id, pct=5,  step="Parsing baseline XER…")
+        baseline_tables, bl_warnings = parse_xer_bytes_to_df(baseline_bytes)
+        del baseline_bytes
+
+        _job_update(job_id, pct=20, step="Parsing updated XER…")
+        updated_tables, up_warnings = parse_xer_bytes_to_df(updated_bytes)
+        del updated_bytes
+
+        for name, tables, label in [
+            ("PROJECT", baseline_tables, "Baseline"),
+            ("TASK",    baseline_tables, "Baseline"),
+            ("PROJECT", updated_tables,  "Updated"),
+            ("TASK",    updated_tables,  "Updated"),
+        ]:
+            if name not in tables or tables[name].empty:
+                _job_update(job_id, status="error",
+                            error=f"{label} file is missing the {name} table.")
+                return
+
+        _job_update(job_id, pct=35, step="Comparing schedules…")
+        _job_update(job_id, pct=50, step="Computing EVM & KPIs…")
+        _job_update(job_id, pct=65, step="Detecting out-of-sequence activities…")
+        _job_update(job_id, pct=75, step="Computing longest path…")
+
+        full_data = _build_full_data(ck, baseline_tables, updated_tables)
+
+        _job_update(job_id, pct=92, step="Saving dashboard…")
+        _save_full(key16, full_data)
+
+        _job_update(job_id, status="done", pct=100,
+                    step="Done! Redirecting…", redirect=dest)
+
+    except Exception as exc:
+        _job_update(job_id, status="error", error=str(exc))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -73,8 +129,6 @@ def _build_full_data(
     ck: str,
     baseline_tables: dict,
     updated_tables: dict,
-    baseline_bytes: bytes,
-    updated_bytes: bytes,
 ) -> dict:
     """Run all engines and return a single JSON-serializable dict."""
     key16 = ck[:16]
@@ -113,6 +167,88 @@ def _build_full_data(
     lookahead   = compute_lookahead(updated_tables, updated_dm, data_date)
     milestones  = compare_milestones(baseline_tables, updated_tables, data_date)
     procurement = compute_procurement(baseline_tables, updated_tables, data_date)
+
+    # OOS detection
+    try:
+        oos = detect_oos(updated_tables, data_date)
+    except Exception as _e:
+        app.logger.warning("detect_oos failed: %s", _e)
+        oos = {"count": 0, "items": []}
+
+    # Longest path / bottleneck
+    try:
+        bottleneck = compute_longest_path(updated_tables, data_date)
+    except Exception as _e:
+        app.logger.warning("compute_longest_path failed: %s", _e)
+        bottleneck = {"bottleneck": None, "driving_chain": []}
+
+    # Full relationships list (all updated relationships for milestone trace + gantt lines)
+    all_relationships = []
+    try:
+        from xer_parser import get_relationships as _get_rels
+        _rels_df = _get_rels(updated_tables)
+        _task_raw = updated_tables.get("TASK", pd.DataFrame())
+        if not _rels_df.empty and not _task_raw.empty and "task_id" in _task_raw.columns:
+            _id2code = dict(zip(_task_raw["task_id"].astype(str), _task_raw["task_code"].astype(str)))
+            _rels_df = _rels_df.copy()
+            if "pred_task_id" in _rels_df.columns:
+                _rels_df["pred_code"] = _rels_df["pred_task_id"].astype(str).map(_id2code).fillna("")
+            if "task_id" in _rels_df.columns:
+                _rels_df["succ_code"] = _rels_df["task_id"].astype(str).map(_id2code).fillna("")
+        if not _rels_df.empty:
+            for _, _r in _rels_df.iterrows():
+                all_relationships.append({
+                    "pred_code": str(_r.get("pred_code", _r.get("pred_task_id", ""))),
+                    "succ_code": str(_r.get("succ_code", _r.get("task_id", ""))),
+                    "pred_type": str(_r.get("pred_type", "")),
+                    "lag_days":  round(float(_r.get("lag_hr_cnt", 0) or 0) / 8.0, 1),
+                })
+    except Exception as _e:
+        app.logger.warning("all_relationships build failed: %s", _e)
+
+    # Resource loading (manpower + equipment per period)
+    resource_loading = updated_dm.get("resource_loading", {})
+
+    # Gantt activities (sorted by WBS for gantt chart rendering)
+    _acts_df = updated_dm.get("activities", None)
+    _task_df = updated_tables.get("TASK", None)
+    gantt = []
+    if _acts_df is not None and not _acts_df.empty:
+        # Float and critical flag from raw TASK table
+        _float_map: dict[str, float] = {}
+        _critical_map: dict[str, bool] = {}
+        if _task_df is not None and not _task_df.empty:
+            for _, _t in _task_df.iterrows():
+                _tid = str(_t.get("task_id", ""))
+                _float_map[_tid]    = float(_t.get("total_float_hr_cnt", 0) or 0) / 8.0
+                _critical_map[_tid] = str(_t.get("driving_path_flag", "")) == "Y"
+
+        _task_type_map: dict[str, str] = {}
+        if _task_df is not None and not _task_df.empty and "task_type" in _task_df.columns:
+            for _, _t in _task_df.iterrows():
+                _task_type_map[str(_t.get("task_id", ""))] = str(_t.get("task_type", ""))
+
+        for _, _a in _acts_df.iterrows():
+            _tid = str(_a.get("task_id", ""))
+            def _s(v): return v.isoformat() if isinstance(v, (pd.Timestamp,)) and pd.notna(v) else (str(v)[:19] if v and str(v) not in ("None","NaT","nan","") else "")
+            gantt.append({
+                "task_code":        str(_a.get("task_code", "")),
+                "task_name":        str(_a.get("task_name", "")),
+                "wbs_name":         str(_a.get("wbs_name", "")),
+                "status":           str(_a.get("status", "")),
+                "planned_start":    _s(_a.get("planned_start")),
+                "planned_finish":   _s(_a.get("planned_finish")),
+                "actual_start":     _s(_a.get("actual_start")),
+                "actual_finish":    _s(_a.get("actual_finish")),
+                "phys_complete_pct": round(float(_a.get("phys_complete_pct", 0)), 1),
+                "original_duration": round(float(_a.get("original_duration", 0)), 1),
+                "total_float_days":  round(_float_map.get(_tid, 0), 1),
+                "is_critical":       _critical_map.get(_tid, False),
+                "wbs_id":            str(_a.get("wbs_id", "")),
+                "task_type":         _task_type_map.get(_tid, ""),
+            })
+        # Sort by WBS then planned_start for sensible gantt ordering
+        gantt.sort(key=lambda x: (x["wbs_name"], x["planned_start"] or ""))
 
     # Chart data (for schedule tab)
     chart_data  = prepare_chart_data(result)
@@ -187,6 +323,11 @@ def _build_full_data(
         "lookahead":            lookahead,
         "milestones":           milestones,
         "procurement":          procurement,
+        "oos":              oos,
+        "bottleneck":       bottleneck,
+        "all_relationships": all_relationships,
+        "resource_loading":     resource_loading,
+        "gantt":                gantt,
         # AI
         "ai_summary":           ai_summary,
     }
@@ -201,63 +342,63 @@ def index():
 
 @app.route("/compare", methods=["POST"])
 def compare():
+    def _err(msg, status=400):
+        return jsonify({"error": msg}), status
+
     baseline_file = request.files.get("baseline")
     updated_file  = request.files.get("updated")
 
     if not baseline_file or not baseline_file.filename:
-        return render_template("index.html", error="Please upload the baseline XER file.")
+        return _err("Please upload the baseline XER file.")
     if not updated_file or not updated_file.filename:
-        return render_template("index.html", error="Please upload the updated XER file.")
+        return _err("Please upload the updated XER file.")
     if not _allowed(baseline_file.filename):
-        return render_template("index.html", error="Baseline file must be a .xer file.")
+        return _err("Baseline file must be a .xer file.")
     if not _allowed(updated_file.filename):
-        return render_template("index.html", error="Updated file must be a .xer file.")
+        return _err("Updated file must be a .xer file.")
 
     baseline_bytes = baseline_file.read()
     updated_bytes  = updated_file.read()
 
     if not baseline_bytes:
-        return render_template("index.html", error="Baseline file is empty.")
+        return _err("Baseline file is empty.")
     if not updated_bytes:
-        return render_template("index.html", error="Updated file is empty.")
-
-    try:
-        baseline_tables, bl_warnings = parse_xer_bytes_to_df(baseline_bytes)
-        updated_tables,  up_warnings = parse_xer_bytes_to_df(updated_bytes)
-
-        # Log parser warnings for debugging (visible in HF Space logs)
-        for w in bl_warnings:
-            app.logger.warning("[Baseline XER] %s", w)
-        for w in up_warnings:
-            app.logger.warning("[Updated XER] %s", w)
-
-        for name, tables, label in [
-            ("PROJECT", baseline_tables, "Baseline"),
-            ("TASK",    baseline_tables, "Baseline"),
-            ("PROJECT", updated_tables,  "Updated"),
-            ("TASK",    updated_tables,  "Updated"),
-        ]:
-            if name not in tables or tables[name].empty:
-                return render_template("index.html",
-                    error=f"{label} file is missing the {name} table.")
-    except Exception as exc:
-        return render_template("index.html", error=f"Failed to parse XER files: {exc}")
+        return _err("Updated file is empty.")
 
     try:
         ck    = cache_key(baseline_bytes, updated_bytes)
         key16 = ck[:16]
-
-        # Return cached dashboard if it exists
-        if _full_path(key16).exists():
-            return redirect(url_for("dashboard", key=key16))
-
-        full_data = _build_full_data(ck, baseline_tables, updated_tables,
-                                     baseline_bytes, updated_bytes)
-        _save_full(key16, full_data)
-        return redirect(url_for("dashboard", key=key16))
-
     except Exception as exc:
-        return render_template("index.html", error=f"Comparison failed: {exc}")
+        return _err(f"Failed to hash XER files: {exc}")
+
+    dest = url_for("dashboard", key=key16)
+
+    # If already cached, return immediately
+    if _full_path(key16).exists():
+        return jsonify({"redirect": dest})
+
+    # Start background job
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "processing", "pct": 0, "step": "Starting…"}
+
+    t = threading.Thread(
+        target=_run_job,
+        args=(job_id, baseline_bytes, updated_bytes, ck, key16, dest),
+        daemon=True,
+    )
+    t.start()
+
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/status/<job_id>")
+def job_status(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(job)
 
 
 @app.route("/r/<key>")

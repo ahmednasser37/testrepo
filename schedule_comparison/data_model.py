@@ -67,23 +67,23 @@ def _status_label(code: str) -> str:
 
 
 def _planned_pct(row: pd.Series, data_date: pd.Timestamp) -> float:
-    status = row["status"]
+    """
+    Planned % complete at data_date, derived purely from baseline dates.
+    Status is intentionally ignored — PV is about the PLAN, not actual progress.
+    Early-completed activities (pf > data_date) correctly get < 100%.
+    """
     ps = _to_dt(row["planned_start"])
     pf = _to_dt(row["planned_finish"])
-
-    if status == "Completed":
-        return 100.0
-    if status == "Not Started":
-        if ps is None or ps > data_date:
-            return 0.0
-        # Started but not marked active — use date-based calc
     if ps is None or pf is None:
+        return 0.0
+    if data_date >= pf:
+        return 100.0
+    if data_date <= ps:
         return 0.0
     span = (pf - ps).total_seconds()
     if span <= 0:
         return 100.0
-    elapsed = (data_date - ps).total_seconds()
-    return _clamp(elapsed / span * 100)
+    return _clamp((data_date - ps).total_seconds() / span * 100)
 
 
 # ── WBS helpers ───────────────────────────────────────────────────────────────
@@ -367,30 +367,26 @@ def build_project_info(tables: dict, activities_df: pd.DataFrame,
         else:
             bac = ac_total = ev_total = 0.0
 
-        # Weights based on cost — always normalised so Σweight == 1
         activities_df = activities_df.copy()
-        if bac > 0:
-            cost_by_task = (
-                resources_df.groupby("task_id")["target_cost"].sum()
-                if not resources_df.empty else pd.Series(dtype=float)
-            )
-            activities_df["_tc"] = activities_df["task_id"].map(cost_by_task).fillna(0)
-            zero_mask = activities_df["_tc"] == 0
-            if zero_mask.any() and n_total > 0:
-                activities_df.loc[zero_mask, "_tc"] = bac / n_total
-            total_tc = activities_df["_tc"].sum()
-            activities_df["weight"] = (
-                activities_df["_tc"] / total_tc if total_tc > 0 else 1.0 / n_total
-            )
+        cost_by_task = (
+            resources_df.groupby("task_id")["target_cost"].sum()
+            if not resources_df.empty else pd.Series(dtype=float)
+        )
+        activities_df["_tc"] = activities_df["task_id"].map(cost_by_task).fillna(0.0)
+
+        # PV = Σ(budget_i × planned_pct_i / 100) — direct, no phantom weights
+        pv = (activities_df["_tc"] * activities_df["planned_pct"] / 100.0).sum()
+
+        # Cost-proportional weights for overall_planned/actual display metrics only
+        total_tc = activities_df["_tc"].sum()
+        if total_tc > 0:
+            activities_df["weight"] = activities_df["_tc"] / total_tc
         else:
             activities_df["weight"] = 1.0 / n_total if n_total > 0 else 0.0
 
         overall_planned  = (activities_df["planned_pct"]       * activities_df["weight"]).sum()
         overall_actual   = (activities_df["phys_complete_pct"] * activities_df["weight"]).sum()
         overall_variance = overall_actual - overall_planned
-
-        # PV = planned value to data_date
-        pv = (activities_df["planned_pct"] / 100.0 * activities_df["weight"] * bac).sum()
 
         spi = ev_total / pv      if pv      > 0 else 0.0
         cpi = ev_total / ac_total if ac_total > 0 else 0.0
@@ -540,6 +536,125 @@ def build_scurve(activities_df: pd.DataFrame,
     return pd.DataFrame(rows)
 
 
+def build_resource_loading(tables: dict, activities_df: pd.DataFrame) -> dict:
+    """Compute per-period (monthly) manpower and equipment loading."""
+    taskrsrc = tables.get("TASKRSRC", pd.DataFrame())
+    rsrc     = tables.get("RSRC",     pd.DataFrame())
+
+    empty = {
+        "manpower": [], "equipment": [],
+        "manpower_peak": 0, "manpower_avg": 0,
+        "equipment_peak": 0, "equipment_avg": 0,
+    }
+
+    if taskrsrc.empty or activities_df.empty:
+        return empty
+
+    # rsrc_type lookup: RT_Labor → manpower, RT_Equip → equipment
+    rsrc_type_map: dict[str, str] = {}
+    if not rsrc.empty and "rsrc_id" in rsrc.columns and "rsrc_type" in rsrc.columns:
+        for _, r in rsrc.iterrows():
+            rsrc_type_map[str(r["rsrc_id"])] = str(r.get("rsrc_type", ""))
+
+    # Activity date lookup
+    act_dates: dict[str, tuple] = {}
+    for _, a in activities_df.iterrows():
+        ps = a.get("planned_start")
+        pf = a.get("planned_finish")
+        if ps is not None and pf is not None and pd.notna(ps) and pd.notna(pf):
+            act_dates[str(a["task_id"])] = (pd.Timestamp(ps), pd.Timestamp(pf))
+
+    # Date range
+    all_starts = [v[0] for v in act_dates.values()]
+    all_ends   = [v[1] for v in act_dates.values()]
+    if not all_starts:
+        return empty
+
+    range_start = min(all_starts)
+    range_end   = max(all_ends)
+    periods = pd.date_range(start=range_start, end=range_end, freq="ME")
+    if len(periods) == 0:
+        periods = pd.date_range(start=range_start,
+                                end=range_end + pd.Timedelta(days=31), freq="ME")
+
+    man_by_period: dict = {p: 0.0 for p in periods}
+    man_act_by_period: dict = {p: 0.0 for p in periods}
+    eq_by_period:  dict = {p: 0.0 for p in periods}
+
+    for _, tr in taskrsrc.iterrows():
+        tid   = str(tr.get("task_id", ""))
+        rid   = str(tr.get("rsrc_id", ""))
+        rtype = rsrc_type_map.get(rid, "RT_Labor")
+        qty   = float(tr.get("target_qty", 0) or 0)
+        act_qty = float(tr.get("act_reg_qty", 0) or 0) + float(tr.get("act_ot_qty", 0) or 0)
+
+        dates = act_dates.get(tid)
+        if not dates or (qty <= 0 and act_qty <= 0):
+            continue
+
+        ps, pf = dates
+        span_days = max(1, (pf - ps).days)
+
+        for p in periods:
+            p_start = p.replace(day=1)
+            p_end   = p
+
+            overlap_start = max(ps, p_start)
+            overlap_end   = min(pf, p_end)
+            if overlap_start >= overlap_end:
+                continue
+
+            overlap_days = (overlap_end - overlap_start).days
+            period_qty   = qty * (overlap_days / span_days)
+            period_act_qty = act_qty * (overlap_days / span_days)
+
+            if rtype == "RT_Equip":
+                eq_by_period[p]  = eq_by_period.get(p, 0)  + period_qty
+            else:
+                man_by_period[p] = man_by_period.get(p, 0) + period_qty
+                man_act_by_period[p] = man_act_by_period.get(p, 0) + period_act_qty
+
+    def _to_list(by_period: dict, act_by_period: dict = None) -> list[dict]:
+        result = []
+        for p, v in sorted(by_period.items()):
+            entry = {"period": p.strftime("%Y-%m"), "qty": round(v, 0)}
+            if act_by_period is not None:
+                entry["planned_qty"] = round(v, 0)
+                entry["act_qty"] = round(act_by_period.get(p, 0.0), 0)
+            result.append(entry)
+        return result
+
+    def _stats(lst: list[dict]):
+        qtys = [x["qty"] for x in lst if x["qty"] > 0]
+        if not qtys:
+            return 0.0, 0.0
+        avg = sum(qtys) / len(qtys)
+        pk  = max(qtys)
+        return round(pk, 0), round(avg, 0)
+
+    man_list = _to_list(man_by_period, man_act_by_period)
+    eq_list  = _to_list(eq_by_period)
+    man_peak, man_avg = _stats(man_list)
+    eq_peak,  eq_avg  = _stats(eq_list)
+
+    # Annotate each point
+    for item in man_list:
+        item["is_peak"]    = item["qty"] == man_peak and man_peak > 0
+        item["above_avg"]  = item["qty"] > man_avg
+    for item in eq_list:
+        item["is_peak"]    = item["qty"] == eq_peak and eq_peak > 0
+        item["above_avg"]  = item["qty"] > eq_avg
+
+    return {
+        "manpower":       man_list,
+        "equipment":      eq_list,
+        "manpower_peak":  man_peak,
+        "manpower_avg":   man_avg,
+        "equipment_peak": eq_peak,
+        "equipment_avg":  eq_avg,
+    }
+
+
 # ── Main entry ────────────────────────────────────────────────────────────────
 
 def process(tables: dict) -> dict[str, pd.DataFrame]:
@@ -548,13 +663,20 @@ def process(tables: dict) -> dict[str, pd.DataFrame]:
     activities, wbs, resources, project_info, scurve
     """
     project = tables.get("PROJECT", pd.DataFrame())
+    data_date = None
     if not project.empty:
-        data_date = pd.to_datetime(
-            project.iloc[0].get("data_date"), errors="coerce"
-        )
-        if pd.isna(data_date):
-            data_date = pd.Timestamp.now().normalize()
-    else:
+        row = project.iloc[0]
+        for col in ("last_recalc_date", "data_date"):
+            val = row.get(col)
+            if val is not None:
+                try:
+                    ts = pd.to_datetime(val, errors="coerce")
+                    if not pd.isna(ts):
+                        data_date = ts
+                        break
+                except Exception:
+                    pass
+    if data_date is None:
         data_date = pd.Timestamp.now().normalize()
 
     activities_df = build_activities(tables, data_date)
@@ -563,21 +685,19 @@ def process(tables: dict) -> dict[str, pd.DataFrame]:
     project_df    = build_project_info(tables, activities_df,
                                        resources_df, data_date)
 
-    # Sync final normalised weights into activities for downstream use
+    # Sync final cost-proportional weights into activities for downstream use
     if not project_df.empty and not activities_df.empty:
         bac = float(project_df.iloc[0].get("BAC", 0))
-        if bac > 0 and not resources_df.empty:
+        if not resources_df.empty:
             cost_by_task = resources_df.groupby("task_id")["target_cost"].sum()
             activities_df = activities_df.copy()
-            activities_df["_tc"] = activities_df["task_id"].map(cost_by_task).fillna(0)
-            n = len(activities_df)
-            zero_mask = activities_df["_tc"] == 0
-            if zero_mask.any() and n > 0:
-                activities_df.loc[zero_mask, "_tc"] = bac / n
+            activities_df["_tc"] = activities_df["task_id"].map(cost_by_task).fillna(0.0)
             total_tc = activities_df["_tc"].sum()
-            activities_df["weight"] = (
-                activities_df["_tc"] / total_tc if total_tc > 0 else 1.0 / n
-            )
+            n = len(activities_df)
+            if total_tc > 0:
+                activities_df["weight"] = activities_df["_tc"] / total_tc
+            else:
+                activities_df["weight"] = 1.0 / n if n > 0 else 0.0
     else:
         bac = 0.0
 
@@ -594,9 +714,10 @@ def process(tables: dict) -> dict[str, pd.DataFrame]:
     )
 
     return {
-        "activities":   activities_df,
-        "wbs":          wbs_df,
-        "resources":    resources_df,
-        "project_info": project_df,
-        "scurve":       scurve_df,
+        "activities":        activities_df,
+        "wbs":               wbs_df,
+        "resources":         resources_df,
+        "project_info":      project_df,
+        "scurve":            scurve_df,
+        "resource_loading":  build_resource_loading(tables, activities_df),
     }

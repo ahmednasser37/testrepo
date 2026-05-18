@@ -1,0 +1,69 @@
+name: Deploy to Hugging Face Spaces
+
+on:
+  push:
+    branches: [main, master, claude/p6-schedule-comparison-app-wIVL1]
+    paths: ["schedule_comparison/**"]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Push schedule_comparison/ to HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ahmednasser37/p6-compare
+          HF_SPACE_NAME: p6-compare
+          HF_USERNAME: ahmednasser37
+        run: |
+          git config --global user.email "ci@github.com"
+          git config --global user.name "GitHub Actions"
+
+          # Create the Space if it doesn't exist
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://huggingface.co/api/spaces/${HF_SPACE}" \
+            -H "Authorization: Bearer ${HF_TOKEN}")
+
+          if [ "$HTTP_STATUS" = "404" ]; then
+            echo "Space not found — creating it..."
+            curl -s -X POST "https://huggingface.co/api/repos/create" \
+              -H "Authorization: Bearer ${HF_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"type\":\"space\",\"name\":\"${HF_SPACE_NAME}\",\"sdk\":\"docker\",\"private\":false}"
+            sleep 5
+          fi
+
+          # Clone the Space (use HF username for credential helper compatibility)
+          git clone https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE} hf_space || true
+
+          if [ ! -d hf_space ]; then
+            mkdir hf_space
+            cd hf_space
+            git init
+            git remote add origin https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}
+            cd ..
+          fi
+
+          # Sync app files (exclude venv, pycache, tests, and .git)
+          rsync -av --delete \
+            --exclude='.git/' \
+            --exclude='.venv/' \
+            --exclude='__pycache__/' \
+            --exclude='*.pyc' \
+            --exclude='tests/' \
+            --exclude='.env' \
+            --exclude='*.log' \
+            schedule_comparison/ hf_space/
+
+          cd hf_space
+          git add -A
+          git diff --cached --quiet && echo "No changes to deploy" && exit 0
+          git commit -m "Deploy from GitHub @ ${GITHUB_SHA::7}"
+          git remote set-url origin https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}
+          git push origin main --force

@@ -4,8 +4,97 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>P6 Schedule Comparison</title>
-  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <style>
+    /* ── Progress overlay ───────────────────────────────────────────── */
+    .prog-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(15,23,42,.72);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .prog-overlay.active { display: flex; }
+
+    .prog-card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 24px 64px rgba(0,0,0,.22);
+      padding: 2rem 2.5rem 2.25rem;
+      width: min(440px, 92vw);
+    }
+    .prog-icon {
+      font-size: 2rem;
+      margin-bottom: .75rem;
+      animation: spin-bounce 1.4s ease-in-out infinite;
+    }
+    @keyframes spin-bounce {
+      0%,100% { transform: rotate(-12deg) scale(1); }
+      50%      { transform: rotate(12deg)  scale(1.1); }
+    }
+    .prog-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: .25rem;
+    }
+    .prog-sub {
+      font-size: .8125rem;
+      color: #64748b;
+      margin-bottom: 1.5rem;
+    }
+
+    /* Phase row */
+    .prog-phase { margin-bottom: 1.1rem; }
+    .prog-phase-hd {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: .8125rem;
+      font-weight: 600;
+      color: #334155;
+      margin-bottom: .35rem;
+    }
+    .prog-phase-pct { color: #2563eb; font-variant-numeric: tabular-nums; }
+    .prog-track {
+      height: 8px;
+      background: #f1f5f9;
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .prog-fill {
+      height: 100%;
+      border-radius: 99px;
+      transition: width .35s ease;
+      background: linear-gradient(90deg, #2563eb, #3b82f6);
+    }
+    .prog-fill.upload-fill { background: linear-gradient(90deg, #2563eb, #60a5fa); }
+    .prog-fill.parse-fill  { background: linear-gradient(90deg, #16a34a, #4ade80); }
+    .prog-fill.done-fill   { background: linear-gradient(90deg, #16a34a, #4ade80); width:100% !important; }
+    .prog-fill.inactive    { background: #e2e8f0; }
+
+    .prog-step-label {
+      font-size: .75rem;
+      color: #64748b;
+      margin-top: 1rem;
+      min-height: 1.1em;
+      font-style: italic;
+    }
+    .prog-error {
+      margin-top: 1rem;
+      padding: .625rem .875rem;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      font-size: .8125rem;
+      color: #b91c1c;
+    }
+  </style>
 </head>
 <body>
   <div class="page-wrap">
@@ -26,7 +115,7 @@
     {% endif %}
 
     <div class="card upload-card">
-      <form method="POST" action="/compare" enctype="multipart/form-data" id="upload-form">
+      <form id="upload-form" enctype="multipart/form-data">
         <div class="upload-grid">
 
           <div class="upload-box">
@@ -63,7 +152,7 @@
           <button type="submit" class="btn-primary" id="submit-btn">
             Compare Schedules
           </button>
-          <span class="submit-hint">Typically under 10 seconds for most XER files</span>
+          <span class="submit-hint">Supports files up to 200 MB each</span>
         </div>
       </form>
     </div>
@@ -100,7 +189,7 @@
           <li>Primavera P6 .XER format</li>
           <li>Must contain PROJECT table</li>
           <li>Must contain TASK table</li>
-          <li>Max 50 MB per file</li>
+          <li>Max 200 MB per file</li>
           <li>UTF-8 or Latin-1 encoding</li>
         </ul>
       </div>
@@ -108,14 +197,48 @@
 
   </div>
 
+  <!-- Progress overlay -->
+  <div class="prog-overlay" id="prog-overlay">
+    <div class="prog-card">
+      <div class="prog-icon" id="prog-icon">⚙️</div>
+      <div class="prog-title">Comparing XER Schedules</div>
+      <div class="prog-sub">Please wait — do not close this tab</div>
+
+      <div class="prog-phase">
+        <div class="prog-phase-hd">
+          <span>Uploading files</span>
+          <span class="prog-phase-pct" id="upload-pct">0%</span>
+        </div>
+        <div class="prog-track">
+          <div class="prog-fill upload-fill" id="upload-bar" style="width:0%"></div>
+        </div>
+      </div>
+
+      <div class="prog-phase">
+        <div class="prog-phase-hd">
+          <span id="parse-label">Parsing &amp; processing</span>
+          <span class="prog-phase-pct" id="parse-pct">—</span>
+        </div>
+        <div class="prog-track">
+          <div class="prog-fill parse-fill inactive" id="parse-bar" style="width:0%"></div>
+        </div>
+      </div>
+
+      <div class="prog-step-label" id="step-label">Preparing upload…</div>
+      <div class="prog-error" id="prog-error" style="display:none"></div>
+    </div>
+  </div>
+
   <script>
-    function setupFileInput(inputId, labelId, nameId, selectedClass) {
-      const input = document.getElementById(inputId);
-      const label = document.getElementById(labelId);
-      const nameEl = document.getElementById(nameId);
+    /* ── File input labels ──────────────────────────────────────────── */
+    function setupInput(inputId, labelId, nameId) {
+      var input = document.getElementById(inputId);
+      var label = document.getElementById(labelId);
+      var nameEl = document.getElementById(nameId);
       input.addEventListener('change', function () {
         if (this.files[0]) {
-          nameEl.textContent = this.files[0].name;
+          var mb = (this.files[0].size / 1048576).toFixed(1);
+          nameEl.textContent = this.files[0].name + ' (' + mb + ' MB)';
           nameEl.classList.add('selected');
           label.classList.add('has-file');
         } else {
@@ -125,13 +248,191 @@
         }
       });
     }
-    setupFileInput('baseline', 'baseline-label', 'baseline-name');
-    setupFileInput('updated',  'updated-label',  'updated-name');
+    setupInput('baseline', 'baseline-label', 'baseline-name');
+    setupInput('updated',  'updated-label',  'updated-name');
 
-    document.getElementById('upload-form').addEventListener('submit', function () {
-      const btn = document.getElementById('submit-btn');
-      btn.textContent = 'Comparing…';
-      btn.disabled = true;
+    /* ── Progress helpers ───────────────────────────────────────────── */
+    var overlay   = document.getElementById('prog-overlay');
+    var uploadBar = document.getElementById('upload-bar');
+    var uploadPct = document.getElementById('upload-pct');
+    var parseBar  = document.getElementById('parse-bar');
+    var parsePct  = document.getElementById('parse-pct');
+    var stepLabel = document.getElementById('step-label');
+    var progError = document.getElementById('prog-error');
+    var parseLabel = document.getElementById('parse-label');
+
+    function setUpload(pct) {
+      pct = Math.min(100, Math.max(0, pct));
+      uploadBar.style.width = pct + '%';
+      uploadPct.textContent = Math.round(pct) + '%';
+    }
+
+    function setParse(pct, label) {
+      pct = Math.min(100, Math.max(0, pct));
+      parseBar.classList.remove('inactive');
+      parseBar.style.width = pct + '%';
+      parsePct.textContent = Math.round(pct) + '%';
+      if (label) stepLabel.textContent = label;
+    }
+
+    function showError(msg) {
+      progError.textContent = msg;
+      progError.style.display = 'block';
+      stepLabel.textContent = 'Upload another file to try again.';
+      document.getElementById('prog-icon').textContent = '❌';
+      document.getElementById('submit-btn').disabled = false;
+      document.getElementById('submit-btn').textContent = 'Compare Schedules';
+      // Allow clicking outside overlay to dismiss
+      overlay.addEventListener('click', function() { overlay.classList.remove('active'); }, { once: true });
+    }
+
+    /* ── Processing step animation ─────────────────────────────────── */
+    var STEPS = [
+      { pct: 8,  label: 'Parsing baseline XER…' },
+      { pct: 22, label: 'Parsing updated XER…' },
+      { pct: 38, label: 'Matching activities…' },
+      { pct: 52, label: 'Computing schedule variances…' },
+      { pct: 64, label: 'Running EVM calculations…' },
+      { pct: 74, label: 'Detecting out-of-sequence activities…' },
+      { pct: 82, label: 'Computing longest path / bottleneck…' },
+      { pct: 89, label: 'Building resource histogram…' },
+      { pct: 94, label: 'Generating Gantt data…' },
+      { pct: 97, label: 'Almost there…' },
+    ];
+
+    var parseTimer = null;
+    var stepIdx = 0;
+
+    function startParseAnimation() {
+      stepIdx = 0;
+      stepLabel.textContent = STEPS[0].label;
+      parseBar.classList.remove('inactive');
+
+      // Advance through steps; each step takes ~2.5s (adjusts itself if server responds faster)
+      parseTimer = setInterval(function () {
+        if (stepIdx >= STEPS.length - 1) return; // stay at 97% until server responds
+        stepIdx++;
+        setParse(STEPS[stepIdx].pct, STEPS[stepIdx].label);
+      }, 2500);
+    }
+
+    function stopParseAnimation(success) {
+      if (parseTimer) { clearInterval(parseTimer); parseTimer = null; }
+      if (success) {
+        parseBar.classList.add('done-fill');
+        setParse(100, 'Done! Redirecting…');
+        document.getElementById('prog-icon').textContent = '✅';
+      }
+    }
+
+    /* ── Form submit via XHR ────────────────────────────────────────── */
+    document.getElementById('upload-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+
+      var baseline = document.getElementById('baseline').files[0];
+      var updated  = document.getElementById('updated').files[0];
+
+      if (!baseline) { alert('Please select the baseline XER file.'); return; }
+      if (!updated)  { alert('Please select the updated XER file.');  return; }
+
+      // Show overlay
+      overlay.classList.add('active');
+      progError.style.display = 'none';
+      document.getElementById('prog-icon').textContent = '⚙️';
+      document.getElementById('submit-btn').disabled = true;
+      document.getElementById('submit-btn').textContent = 'Working…';
+      setUpload(0);
+      parseBar.classList.add('inactive');
+      parseBar.style.width = '0%';
+      parsePct.textContent = '—';
+      stepLabel.textContent = 'Preparing upload…';
+
+      var fd = new FormData();
+      fd.append('baseline', baseline);
+      fd.append('updated', updated);
+
+      var xhr = new XMLHttpRequest();
+
+      // Real upload progress
+      xhr.upload.addEventListener('progress', function (ev) {
+        if (ev.lengthComputable) {
+          setUpload(ev.loaded / ev.total * 100);
+          if (ev.loaded < ev.total) {
+            var mb = (ev.loaded / 1048576).toFixed(1);
+            var tot = (ev.total / 1048576).toFixed(1);
+            stepLabel.textContent = 'Uploading ' + mb + ' / ' + tot + ' MB…';
+          }
+        }
+      });
+
+      xhr.upload.addEventListener('load', function () {
+        setUpload(100);
+        stepLabel.textContent = 'Upload complete — server is processing…';
+        setParse(2, 'Waiting for server…');
+      });
+
+      var pollTimer = null;
+
+      function startPolling(jobId) {
+        pollTimer = setInterval(function () {
+          fetch('/status/' + jobId)
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+              if (res.error) {
+                clearInterval(pollTimer);
+                showError(res.error);
+                return;
+              }
+              // Update parse bar with real server progress
+              setParse(res.pct || 0, res.step || '');
+              if (res.status === 'done') {
+                clearInterval(pollTimer);
+                stopParseAnimation(true);
+                setTimeout(function () { window.location.href = res.redirect; }, 400);
+              } else if (res.status === 'error') {
+                clearInterval(pollTimer);
+                showError(res.error || 'Processing failed.');
+              }
+            })
+            .catch(function () { /* network blip — keep polling */ });
+        }, 1500);
+      }
+
+      xhr.addEventListener('load', function () {
+        if (xhr.status === 413) {
+          showError('Files are too large. Maximum 200 MB per file.');
+          return;
+        }
+        try {
+          var res = JSON.parse(xhr.responseText);
+          if (res.error) { showError(res.error); return; }
+          if (res.redirect) {
+            // Cached result — go straight there
+            stopParseAnimation(true);
+            setTimeout(function () { window.location.href = res.redirect; }, 400);
+            return;
+          }
+          if (res.job_id) {
+            // Background job started — poll for progress
+            startPolling(res.job_id);
+            return;
+          }
+        } catch (_) {}
+        showError('Unexpected server response. Please try again.');
+      });
+
+      xhr.addEventListener('error', function () {
+        showError('Network error — please check your connection and try again.');
+      });
+
+      xhr.addEventListener('timeout', function () {
+        showError('Upload timed out — please try again.');
+      });
+
+      xhr.open('POST', '/compare');
+      xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+      xhr.timeout = 600000; // 10 minutes for large file upload
+      xhr.send(fd);
     });
   </script>
 </body>

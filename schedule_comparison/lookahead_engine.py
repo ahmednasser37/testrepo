@@ -43,10 +43,10 @@ def compute_lookahead(updated_tables: dict, updated_data: dict, data_date) -> di
         return _empty(data_date)
 
     wk2 = data_date + timedelta(weeks=2)
-    wk4 = data_date + timedelta(weeks=4)
+    wk3 = data_date + timedelta(weeks=3)
     wk6 = data_date + timedelta(weeks=6)
 
-    overdue, two_week, four_week, six_week = [], [], [], []
+    overdue, two_week, three_week, six_week = [], [], [], []
 
     for _, act in activities.iterrows():
         status = str(act.get("status", "Not Started"))
@@ -81,32 +81,32 @@ def compute_lookahead(updated_tables: dict, updated_data: dict, data_date) -> di
             overdue.append(item)
         elif ps <= wk2:
             two_week.append(item)
-        elif ps <= wk4:
-            four_week.append(item)
+        elif ps <= wk3:
+            three_week.append(item)
         elif ps <= wk6:
             six_week.append(item)
 
     def _sort(lst):
         lst.sort(key=lambda x: (not x["is_critical"], x["planned_start"]))
 
-    for lst in [overdue, two_week, four_week, six_week]:
+    for lst in [overdue, two_week, three_week, six_week]:
         _sort(lst)
 
-    all_items = overdue + two_week + four_week + six_week
+    all_items = overdue + two_week + three_week + six_week
     wbs_nodes = sorted({i["wbs_name"] for i in all_items if i["wbs_name"]})
 
     return {
-        "data_date": _fmt(data_date),
-        "overdue":   overdue,
-        "two_week":  two_week,
-        "four_week": four_week,
-        "six_week":  six_week,
-        "wbs_nodes": wbs_nodes,
+        "data_date":  _fmt(data_date),
+        "overdue":    overdue,
+        "two_week":   two_week,
+        "three_week": three_week,
+        "six_week":   six_week,
+        "wbs_nodes":  wbs_nodes,
         "counts": {
-            "overdue":   len(overdue),
-            "two_week":  len(two_week),
-            "four_week": len(four_week),
-            "six_week":  len(six_week),
+            "overdue":    len(overdue),
+            "two_week":   len(two_week),
+            "three_week": len(three_week),
+            "six_week":   len(six_week),
         },
     }
 
@@ -114,7 +114,7 @@ def compute_lookahead(updated_tables: dict, updated_data: dict, data_date) -> di
 def _empty(data_date) -> dict:
     return {
         "data_date": _fmt(data_date),
-        "overdue": [], "two_week": [], "four_week": [], "six_week": [],
+        "overdue": [], "two_week": [], "three_week": [], "six_week": [],
         "wbs_nodes": [],
-        "counts": {"overdue": 0, "two_week": 0, "four_week": 0, "six_week": 0},
+        "counts": {"overdue": 0, "two_week": 0, "three_week": 0, "six_week": 0},
     }

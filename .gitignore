@@ -1,0 +1,19 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
+node_modules/
+test-results/
+playwright-report/
+.env
+.claude/worktrees/

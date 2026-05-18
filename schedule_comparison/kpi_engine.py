@@ -124,6 +124,57 @@ def compute_kpis(
     on_time_start  = sum(1 for v in variances if abs(v.start_variance_days) <= 2 and v.change_type != "added")
     on_time_finish = sum(1 for v in variances if abs(v.finish_variance_days) <= 2 and v.change_type not in ("added", "deleted"))
 
+    # ── New EVM / schedule status fields ────────────────────────────────────────
+
+    # SPI to use for status (cost-based if available, else duration)
+    _spi_for_status = float(_pval(u_info, "SPI") or 0) or (spi_duration or 0)
+    schedule_status = (
+        "AHEAD"    if _spi_for_status >= 1.05 else
+        "ON TRACK" if _spi_for_status >= 0.95 else
+        "BEHIND"   if _spi_for_status >  0    else
+        "UNKNOWN"
+    )
+
+    # Time elapsed % from plan_start to plan_end
+    _plan_start  = _pval(u_info, "planned_start")
+    _plan_finish = _pval(u_info, "planned_finish")
+    _data_date_v = _pval(u_info, "data_date")
+    time_elapsed_pct = None
+    if _plan_start and _plan_finish and _data_date_v:
+        try:
+            _ps = pd.Timestamp(str(_plan_start))
+            _pf = pd.Timestamp(str(_plan_finish))
+            _dd = pd.Timestamp(str(_data_date_v))
+            _total = (_pf - _ps).days
+            if _total > 0:
+                time_elapsed_pct = round(max(0.0, min(100.0, (_dd - _ps).days / _total * 100)), 1)
+        except Exception:
+            pass
+
+    # Contract dates (ISO strings, no time)
+    contract_start  = str(_plan_start)[:10]  if _plan_start  else None
+    contract_finish = str(_plan_finish)[:10] if _plan_finish else None
+
+    # Forecast finish date (SPI-based)
+    forecast_finish = None
+    if _plan_start and _plan_finish and _spi_for_status > 0.01:
+        try:
+            _ps = pd.Timestamp(str(_plan_start))
+            _pf = pd.Timestamp(str(_plan_finish))
+            _total_days = (_pf - _ps).days
+            _forecast_days = _total_days / _spi_for_status
+            forecast_finish = (_ps + pd.Timedelta(days=_forecast_days)).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    # Cumulative % KPIs
+    _bac = float(_pval(u_info, "BAC") or 0)
+    _pv  = float(_pval(u_info, "PV")  or 0)
+    _ev  = float(_pval(u_info, "EV")  or 0)
+    cum_pv_pct = round(_pv / _bac * 100, 2) if _bac > 0 else None
+    cum_ev_pct = round(_ev / _bac * 100, 2) if _bac > 0 else None
+    sv_pct     = round((_ev - _pv) / _bac * 100, 2) if _bac > 0 else None
+
     return {
         # 4 priority KPIs
         "float_consumption_days":   avg_float_consumed,
@@ -149,4 +200,13 @@ def compute_kpis(
         "unchanged":                s.get("unchanged", 0),
         "max_delay_days":           round(float(s.get("max_delay_days", 0)), 1),
         "avg_finish_variance_days": round(float(s.get("avg_finish_variance_days", 0)), 1),
+        # New EVM / schedule status fields
+        "schedule_status":          schedule_status,
+        "time_elapsed_pct":         time_elapsed_pct,
+        "contract_start":           contract_start,
+        "contract_finish":          contract_finish,
+        "forecast_finish":          forecast_finish,
+        "cum_pv_pct":               cum_pv_pct,
+        "cum_ev_pct":               cum_ev_pct,
+        "sv_pct":                   sv_pct,
     }

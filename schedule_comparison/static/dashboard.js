@@ -448,8 +448,8 @@ function renderSCurveSVG(container, baselineArr, updatedArr) {
   xt.forEach(d => {
     const x = xOf(d).toFixed(1);
     if (parseFloat(x) < PL || parseFloat(x) > PL+cW) return;
-    const label = d.toISOString().slice(0,7);
-    svgParts.push(`<text x="${x}" y="${PT+cH+14}" text-anchor="middle" font-size="9" fill="#9ca3af">${label}</text>`);
+    const label = d.toLocaleString('en-US', { month: 'short', year: '2-digit' });
+    svgParts.push(`<text x="${x}" y="${PT+cH+16}" text-anchor="middle" font-size="10" fill="#6b7280">${label}</text>`);
   });
 
   // Clipped group for lines and areas
@@ -1009,8 +1009,8 @@ function renderKPIs(el) {
   const spiColor   = colorForSPI(K.spi_duration);
   const delayColor = colorForDelay(K.schedule_delay_days);
 
-  const onTimeStart  = K.on_time_start_rate  != null ? fmt(K.on_time_start_rate * 100, 1)  + '%' : '—';
-  const onTimeFinish = K.on_time_finish_rate != null ? fmt(K.on_time_finish_rate * 100, 1) + '%' : '—';
+  const onTimeStart  = K.on_time_start_rate  != null ? fmt(K.on_time_start_rate, 1)  + '%' : '—';
+  const onTimeFinish = K.on_time_finish_rate != null ? fmt(K.on_time_finish_rate, 1) + '%' : '—';
 
   const kpiChartData = [
     { metric: 'Float Consumed (d)', value: K.float_consumption_days  || 0 },
@@ -2087,7 +2087,14 @@ function renderWBS(el) {
 
   const rows = wbs.map(row => `
     <tr data-testid="activity-row">
-      ${sampleKeys.map(k => `<td>${esc(row[k])}</td>`).join('')}
+      ${sampleKeys.map(k => {
+        const v = row[k];
+        const num = typeof v === 'number' ? v : parseFloat(v);
+        const cell = (!isNaN(num) && v !== '' && v !== null && typeof v !== 'boolean')
+          ? num.toLocaleString('en-US', { maximumFractionDigits: 2 })
+          : esc(v);
+        return `<td>${cell}</td>`;
+      }).join('')}
     </tr>`).join('');
 
   el.innerHTML = `
@@ -2328,7 +2335,12 @@ function initHealthBadge() {
   if (!badge) return;
   const K = D.kpis || {};
   const ai = D.ai_summary || {};
-  const rawStatus = K.schedule_status || ai.schedule_health || 'unknown';
+  let rawStatus = K.schedule_status || ai.schedule_health;
+  // Derive from SPI if backend didn't supply a status
+  if (!rawStatus && K.spi_duration != null) {
+    rawStatus = K.spi_duration >= 0.95 ? (K.spi_duration > 1.05 ? 'AHEAD' : 'ON TRACK') : 'BEHIND';
+  }
+  rawStatus = rawStatus || 'unknown';
   const status = rawStatus.toLowerCase().replace(/[\s_]+/g, '');
   const labels = { ahead: 'AHEAD', ontrack: 'ON TRACK', behind: 'BEHIND', unknown: '—' };
   badge.textContent = labels[status] || rawStatus.toUpperCase();
@@ -2337,7 +2349,7 @@ function initHealthBadge() {
 
 /* ── Bootstrap ───────────────────────────────────────────────────────────── */
 
-document.addEventListener('DOMContentLoaded', () => {
+function _bootstrap() {
   // Sidebar nav-item click handlers
   const tabTitles = {
     overview: 'Overview', schedule: 'Schedule', kpis: 'KPIs',
@@ -2394,4 +2406,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Set health badge
   initHealthBadge();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _bootstrap);
+} else {
+  _bootstrap();
+}
